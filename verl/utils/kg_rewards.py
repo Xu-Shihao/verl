@@ -6,7 +6,7 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from pydantic import BaseModel
 
 # 导入基础模型和函数
-from src.RL.utils.reward_base import (
+from verl.utils.kg_reward_base import (
     GraphEvaluationInput, GraphEvaluationOutput,
     ReasoningEvaluationInput, ReasoningEvaluationOutput,
     get_remote_graph_eval_prompt, get_qwen_graph_eval_prompt,

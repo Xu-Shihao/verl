@@ -83,9 +83,9 @@ def main(config):
         # 解析命令行参数，但不使用sys.argv（因为hydra已经处理过这些参数）
         # 仅用于打印调试信息和获取默认值
         args = argparse.ArgumentParser(description="知识图谱抽取的PPO训练")
-        args.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/data/kg_extraction/kg_extraction_config.yaml",
+        args.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/verl/trainer/config/kg_extraction_config.yaml",
                          help="自定义配置文件路径，覆盖默认配置")
-        args.add_argument("--data_path", type=str, default="/mnt/afs/tanka/shihao/data/kg_extraction/kg_extraction_train.jsonl",
+        args.add_argument("--data_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/data/kg_extraction/kg_extraction_train.jsonl",
                          help="训练数据路径，覆盖配置文件中的设置")
         args.add_argument("--model_path", type=str, default="/mnt/afs/tanka/shihao/model/Qwen2.5-0.5B-Instruct",
                          help="基础模型路径，覆盖配置文件中的设置")
