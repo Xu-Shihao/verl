@@ -39,60 +39,12 @@ verl/
 ### 1. 准备数据
 
 ```bash
-python run_kg_extraction.py --input_csv /path/to/your/data.csv --data_dir ./data/kg_extraction --only_prepare_data
+python examples/data_preprocess/kg.py --local_dir ./data/kg_extraction
 ```
 
-### 2. 运行训练
+### 2. 验证LLM
 
 ```bash
-python run_kg_extraction.py --data_dir ./data/kg_extraction --model_path /path/to/your/model --output_dir ./outputs/kg_extraction --skip_data_preparation
+python tests/kg_extract/test_local_evaluator.py
 ```
 
-### 3. 一步完成（准备数据并训练）
-
-```bash
-python run_kg_extraction.py --input_csv /path/to/your/data.csv --model_path /path/to/your/model --output_dir ./outputs/kg_extraction
-```
-
-## 高级配置
-
-可以通过编辑生成的配置文件（`data/kg_extraction/kg_extraction_config.yaml`）来调整更多训练参数：
-
-- PPO算法参数（学习率、batch大小、KL惩罚等）
-- 奖励函数权重
-- 训练资源配置
-
-## 数据格式
-
-输入CSV文件应包含以下列：
-- `input_text`: 需要抽取知识图谱的文本
-- `ground_truth`: 标准知识图谱（JSON格式）
-
-生成的JSONL文件遵循verl框架的数据格式规范。
-
-## 奖励机制
-
-模型输出格式要求：
-```
-<reasoning>
-推理过程...
-</reasoning>
-<answer>
-{
-  "nodes": [
-    {"id": "node1", "label": "实体1", "type": "类型1"},
-    ...
-  ],
-  "edges": [
-    {"source": "node1", "target": "node2", "relation": "关系"},
-    ...
-  ]
-}
-</answer>
-```
-
-奖励计算基于：
-1. 输出格式合规性（0.1权重）
-2. XML标签使用正确性（0.1权重）
-3. 图结构正确性与完整性（0.6权重）
-4. 推理质量（0.2权重） 

@@ -14,11 +14,8 @@ def main():
     """解析命令行参数并启动训练"""
     parser = argparse.ArgumentParser(description="知识图谱抽取的PPO训练")
     
-    parser.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/data/kg_extraction/kg_extraction_config.yaml",
+    parser.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/verl/trainer/config/kg_extraction_config.yaml",
                         help="自定义配置文件路径，覆盖默认配置")
-    
-    parser.add_argument("--data_path", type=str, default="/mnt/afs/tanka/shihao/data/kg_extraction/kg_extraction_train.jsonl",
-                        help="训练数据路径，覆盖配置文件中的设置")
     
     parser.add_argument("--model_path", type=str, default="/mnt/afs/tanka/shihao/model/Qwen2.5-0.5B-Instruct",
                         help="基础模型路径，覆盖配置文件中的设置")
@@ -38,7 +35,6 @@ def main():
     print("\n" + "="*50)
     print("默认参数配置：")
     print(f"配置文件路径: {args.config_path}")
-    print(f"训练数据路径: {args.data_path}")
     print(f"模型路径: {args.model_path}")
     print(f"输出目录: {args.output_dir}")
     print(f"调试模式: {'开启' if args.debug else '关闭'}")
@@ -54,8 +50,6 @@ def main():
     # 添加覆盖参数
     overrides = []
     
-    if args.data_path:
-        overrides.append(f"data.train_path={args.data_path}")
     
     if args.model_path:
         overrides.append(f"actor_rollout_ref.model.path={args.model_path}")

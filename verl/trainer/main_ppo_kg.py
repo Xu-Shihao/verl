@@ -26,6 +26,9 @@ from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 # from verl.trainer.ppo.reward import load_reward_manager
 from verl.utils.kg_rewards import compute_kg_extraction_reward
 
+import dotenv
+dotenv.load_dotenv()
+
 def get_custom_reward_fn(config):
     """
     从指定路径动态加载自定义奖励函数。
@@ -85,8 +88,6 @@ def main(config):
         args = argparse.ArgumentParser(description="知识图谱抽取的PPO训练")
         args.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/verl/trainer/config/kg_extraction_config.yaml",
                          help="自定义配置文件路径，覆盖默认配置")
-        args.add_argument("--data_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/data/kg_extraction/kg_extraction_train.jsonl",
-                         help="训练数据路径，覆盖配置文件中的设置")
         args.add_argument("--model_path", type=str, default="/mnt/afs/tanka/shihao/model/Qwen2.5-0.5B-Instruct",
                          help="基础模型路径，覆盖配置文件中的设置")
         args.add_argument("--output_dir", type=str, default="/mnt/afs/tanka/shihao/outputs/kg_extraction_debug",
@@ -95,6 +96,8 @@ def main(config):
                          help="调试模式，使用较小的训练配置")
         args.add_argument("--quick_test", action="store_true",
                          help="快速测试模式，仅初始化训练环境但不开始训练")
+        args.add_argument("--debug_locally", action="store_true",
+                         help="本地调试模式，在主进程中运行TaskRunner，便于断点调试")
         args = args.parse_args([])  # 仅获取默认值，不处理实际命令行参数
         
         # 打印调试信息
@@ -118,14 +121,19 @@ def run_ppo(config) -> None:
     """
     # 步骤1: 设置环境变量和初始化Ray
     os.environ["ENSURE_CUDA_VISIBLE_DEVICES"] = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    if not ray.is_initialized():
-        # 初始化本地Ray集群
-        ray.init(
-            runtime_env={
-                "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
-            },
-            num_cpus=config.ray_init.num_cpus,
-        )
+    
+    # 检查是否启用本地调试模式
+    debug_locally = config.get("debug_locally", False)
+    
+    if not debug_locally:
+        if not ray.is_initialized():
+            # 初始化本地Ray集群
+            ray.init(
+                runtime_env={
+                    "env_vars": {"TOKENIZERS_PARALLELISM": "true", "NCCL_DEBUG": "WARN", "VLLM_LOGGING_LEVEL": "WARN"}
+                },
+                num_cpus=config.ray_init.num_cpus,
+            )
 
     # 检查是否是快速测试模式
     quick_test_mode = config.get("quick_test_mode", False)
@@ -137,9 +145,20 @@ def run_ppo(config) -> None:
         print("=========================\n")
         return
 
-    # 步骤2: 创建远程任务运行器并执行
-    runner = TaskRunner.remote()
-    ray.get(runner.run.remote(config))
+    # 步骤2: 创建任务运行器并执行
+    if debug_locally:
+        # 本地调试模式：直接在主进程中执行，便于设置断点
+        print("\n===== 本地调试模式 =====")
+        print("在主进程中直接执行TaskRunner")
+        print("断点应该可以正常工作")
+        print("=========================\n")
+        runner = LocalTaskRunner()
+        import asyncio
+        asyncio.run(runner.run(config))
+    else:
+        # 正常Ray远程执行模式
+        runner = TaskRunner.remote()
+        ray.get(runner.run.remote(config))
 
 
 @ray.remote(num_cpus=1)  # 确保主任务不在头节点上调度
@@ -266,12 +285,117 @@ class TaskRunner:
         await trainer.fit()
 
 
+# 本地调试版本的TaskRunner，无Ray装饰器
+class LocalTaskRunner:
+    """本地任务运行器，用于调试时在主进程中执行，支持断点调试"""
+    
+    async def run(self, config):
+        """
+        运行PPO训练任务
+        
+        参数:
+            config: 包含训练配置的对象
+        """
+        # 步骤1: 打印初始配置
+        from pprint import pprint
+        from omegaconf import OmegaConf
+        from verl.utils.fs import copy_to_local
+
+        pprint(OmegaConf.to_container(config, resolve=True))  # resolve=True会计算符号值
+        OmegaConf.resolve(config)
+
+        # 步骤2: 从HDFS下载检查点到本地
+        local_path = copy_to_local(config.actor_rollout_ref.model.path)
+        print(f"模型本地路径: {local_path}")
+
+        # 步骤3: 实例化tokenizer和processor
+        from verl.utils import hf_processor, hf_tokenizer
+
+        trust_remote_code = config.data.get("trust_remote_code", False)
+        tokenizer = hf_tokenizer(local_path, trust_remote_code=trust_remote_code)
+        processor = hf_processor(local_path, use_fast=True)  # 用于多模态LLM，可能为None
+
+        # 为简化调试，创建一个简单的调试点
+        print("\n===== 开始调试会话 =====")
+        print("您现在可以在此处设置断点，检查关键对象")
+        print("对象可用性:")
+        print(f"- config: {'可用' if config else '不可用'}")
+        print(f"- tokenizer: {'可用' if tokenizer else '不可用'}")
+        print(f"- processor: {'可用' if processor else '不可用'}")
+        
+        # 加载奖励函数
+        print("\n加载计算奖励函数...")
+        compute_score = compute_kg_extraction_reward
+        
+        
+        # 创建一个简单的测试数据用于调试
+        print("\n创建测试数据...")
+        test_data = {
+            "prompt": "请从以下文本中提取知识三元组: 苹果公司总部位于加利福尼亚州的库比蒂诺。",
+            "response": """<think>
+分析文本，我们可以确定以下信息：
+1. 苹果公司是一家公司
+2. 库比蒂诺是苹果公司的总部所在地
+3. 加利福尼亚州是库比蒂诺所在的州
+</think>
+<answer>
+{
+    "nodes": [
+        {"id": "1", "name": "苹果公司", "type": "Company"},
+        {"id": "2", "name": "库比蒂诺", "type": "Location"},
+        {"id": "3", "name": "加利福尼亚州", "type": "Location"}
+    ],
+    "edges": [
+        {"from": "1", "to": "2", "label": "总部位于"},
+        {"from": "2", "to": "3", "label": "位于"}
+    ]
+}
+</answer>
+"""
+        }
+        
+        
+        # 按照compute_kg_extraction_reward函数的要求提供参数
+        data_source = "test_data"
+        solution_str = test_data["response"]
+        ground_truth = {
+            "ground_truth_answer": """
+{
+    "nodes": [
+        {"id": "1", "name": "苹果公司", "type": "Company"},
+        {"id": "2", "name": "库比蒂诺", "type": "Location"},
+        {"id": "3", "name": "加利福尼亚州", "type": "Location"}
+    ],
+    "edges": [
+        {"from": "1", "to": "2", "label": "总部位于"},
+        {"from": "2", "to": "3", "label": "位于"}
+    ]
+}
+""",
+            "ground_truth_reasoning": "这段文本描述了苹果公司的总部位置，其中包含两个关系：苹果公司的总部位于库比蒂诺，以及库比蒂诺位于加利福尼亚州。"
+        }
+        
+        reward = compute_score(data_source, solution_str, ground_truth)
+        print(f"计算的奖励值: {reward}")
+        
+        # 简化的退出
+        print("\n调试完成。您可以在此处添加更多断点和调试代码。")
+        print("=========================\n")
+        
+        # 如果需要继续训练流程，取消下面的注释
+        # from verl.trainer.ppo.ray_trainer import RayPPOTrainer
+        # trainer = RayPPOTrainer(...)
+        # trainer.init_workers()
+        # await trainer.fit()
+        
+        return
+
+
 def print_debug_info(config, args):
     """打印调试信息"""
     print("\n" + "="*50)
     print("调试信息：")
     print(f"配置文件默认路径: {args.config_path}")
-    print(f"训练数据默认路径: {args.data_path}")
     print(f"模型默认路径: {args.model_path}")
     print(f"输出目录默认值: {args.output_dir}")
     

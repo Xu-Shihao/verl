@@ -2,8 +2,8 @@ data:
   tokenizer: null
   train_files: ${data.train_path}
   val_files: ${data.val_path}
-  train_path: /mnt/afs/tanka/shihao/project/data/kg_extraction/kg_extraction_train.jsonl
-  val_path: /mnt/afs/tanka/shihao/project/data/kg_extraction/kg_extraction_val.jsonl
+  train_path: /mnt/afs/tanka/shihao/project/verl/data/kg_extraction/train.parquet
+  val_path: /mnt/afs/tanka/shihao/project/verl/data/kg_extraction/val.parquet
   prompt_key: prompt
   reward_fn_key: data_source
   max_prompt_length: 512
@@ -226,7 +226,7 @@ trainer:
   rollout_data_dir: null
   validation_data_dir: null
   nnodes: 1
-  n_gpus_per_node: 2
+  n_gpus_per_node: 1
   save_freq: 2
   resume_mode: auto
   resume_from_path: null
@@ -245,3 +245,4 @@ ray_init:
   num_cpus: 32
 
 quick_test_mode: false
+debug_locally: true

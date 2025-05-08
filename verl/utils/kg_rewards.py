@@ -34,10 +34,10 @@ def extract_json_from_answer(answer_text: str) -> str:
     return ""
 
 def extract_thinking_content(text: str) -> str:
-    """从<think>...</think>或<reasoning>...</reasoning>标签中提取思考内容"""
+    """从<think>...</think>或<think>...</think>标签中提取思考内容"""
     # 先尝试提取<think>标签内容
     thinking = extract_tag_content(text, "think")
-    # 如果没有找到，则尝试提取<reasoning>标签内容
+    # 如果没有找到，则尝试提取<think>标签内容
     if not thinking:
         thinking = extract_tag_content(text, "reasoning")
     return thinking
@@ -159,7 +159,7 @@ def call_vllm_qwen_with_schema(prompt: str, response_schema: Type[BaseModel],
 # 格式检查奖励函数
 def format_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
     """检查输出是否符合特定格式的奖励函数"""
-    # 检查<think>...</think>或<reasoning>...</reasoning>标签
+    # 检查<think>...</think>或<think>...</think>标签
     has_thinking = bool(extract_thinking_content(solution_str))
     
     # 检查<answer>...</answer>标签
@@ -179,46 +179,59 @@ def xml_count_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
     """基于XML标签计数的奖励函数"""
     count = 0.0
     
-    # 检查thinking/reasoning标签
-    if solution_str.count("<think>") == 1:
+    # 检查reasoning标签
+    if solution_str.count("<think>\n") == 1:
         count += 0.125
-    elif solution_str.count("<reasoning>") == 1:
-        count += 0.125
-        
-    if solution_str.count("</think>") == 1:
-        count += 0.125
-    elif solution_str.count("</reasoning>") == 1:
+    if solution_str.count("\n</think>\n") == 1:
         count += 0.125
     
     # 检查answer标签
-    if solution_str.count("<answer>") == 1:
+    if solution_str.count("\n<answer>\n") == 1:
         count += 0.125
-    if solution_str.count("</answer>") == 1:
+        count -= len(solution_str.split("\n</answer>\n")[-1])*0.001
+    if solution_str.count("\n</answer>") == 1:
         count += 0.125
-    
-    # 检查标签之间的顺序是否正确
-    if "<think>" in solution_str and "</think>" in solution_str:
-        if solution_str.find("<think>") < solution_str.find("</think>"):
-            count += 0.125
-    elif "<reasoning>" in solution_str and "</reasoning>" in solution_str:
-        if solution_str.find("<reasoning>") < solution_str.find("</reasoning>"):
-            count += 0.125
-            
-    if "<answer>" in solution_str and "</answer>" in solution_str:
-        if solution_str.find("<answer>") < solution_str.find("</answer>"):
-            count += 0.125
-    
-    # 检查thinking/reasoning在answer之前
-    if "</think>" in solution_str and "<answer>" in solution_str:
-        if solution_str.find("</think>") < solution_str.find("<answer>"):
-            count += 0.125
-    elif "</reasoning>" in solution_str and "<answer>" in solution_str:
-        if solution_str.find("</reasoning>") < solution_str.find("<answer>"):
-            count += 0.125
+        count -= (len(solution_str.split("\n</answer>")[-1]) - 1)*0.001
     
     return {
         "score": count,
         "xml_count": count
+    }
+
+def strict_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>\n$"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, r) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
+
+def soft_format_reward_func(completions, **kwargs) -> list[float]:
+    """Reward function that checks if the completion has a specific format."""
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+    responses = [completion[0]["content"] for completion in completions]
+    matches = [re.match(pattern, r) for r in responses]
+    return [0.5 if match else 0.0 for match in matches]
+
+def strict_format_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
+    """检查输出是否符合严格的XML格式要求"""
+    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>\n$"
+    match = re.match(pattern, solution_str, re.DOTALL)
+    score = 0.5 if match else 0.0
+    
+    return {
+        "score": score,
+        "strict_format_score": score
+    }
+
+def soft_format_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
+    """检查输出是否符合宽松的XML格式要求"""
+    pattern = r"<think>.*?</think>\s*<answer>.*?</answer>"
+    match = re.match(pattern, solution_str, re.DOTALL)
+    score = 0.5 if match else 0.0
+    
+    return {
+        "score": score,
+        "soft_format_score": score
     }
 
 # 图正确性奖励函数
@@ -284,7 +297,8 @@ def llm_compare_extracted_graph(extracted_graph: str, ground_truth: str) -> floa
     )
 
     # 选择使用哪种评估方式
-    use_local_model = os.getenv("USE_LOCAL_QWEN_FOR_EVAL", "false").lower() == "true"
+    # use_local_model = os.getenv("USE_LOCAL_QWEN_FOR_EVAL", "false").lower() == "true"
+    use_local_model = True
     
     if use_local_model:
         return qwen_compare_extracted_graph(input_data)
@@ -414,7 +428,8 @@ def llm_reasoning_score(reasoning: str, ground_truth: str) -> float:
     )
     
     # 选择使用哪种评估方式
-    use_local_model = os.getenv("USE_LOCAL_QWEN_FOR_EVAL", "false").lower() == "true"
+    # use_local_model = os.getenv("USE_LOCAL_QWEN_FOR_EVAL", "false").lower() == "true"
+    use_local_model = True
     
     if use_local_model:
         return qwen_reasoning_score(input_data)
@@ -559,21 +574,31 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
     # 2. XML标签奖励
     xml_reward_result = xml_count_reward(solution_str)
     
-    # 3. 图正确性奖励
+    # 3. 严格格式奖励
+    strict_format_result = strict_format_reward(solution_str)
+    
+    # 4. 宽松格式奖励
+    soft_format_result = soft_format_reward(solution_str)
+    
+    # 5. 图正确性奖励
     graph_reward_result = graph_correctness_reward(solution_str, ground_truth_answer)
     
-    # 4. 推理质量奖励
+    # 6. 推理质量奖励
     reasoning_reward_result = reasoning_quality_reward(solution_str, ground_truth_reasoning)
     
     # 计算加权总分
-    format_weight = 0.1
-    xml_weight = 0.1
+    format_weight = 0.05
+    xml_weight = 0.05
+    strict_format_weight = 0.05
+    soft_format_weight = 0.05
     graph_weight = 0.6
     reasoning_weight = 0.2
     
     total_score = (
         format_reward_result["score"] * format_weight +
         xml_reward_result["score"] * xml_weight +
+        strict_format_result["score"] * strict_format_weight +
+        soft_format_result["score"] * soft_format_weight +
         graph_reward_result["score"] * graph_weight +
         reasoning_reward_result["score"] * reasoning_weight
     )
@@ -582,6 +607,8 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
         "score": total_score,
         "format_score": format_reward_result["score"],
         "xml_count": xml_reward_result["score"],
+        "strict_format_score": strict_format_result["score"],
+        "soft_format_score": soft_format_result["score"],
         "graph_score": graph_reward_result["score"],
         "reasoning_score": reasoning_reward_result["score"]
     }
