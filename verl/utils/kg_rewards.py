@@ -14,6 +14,14 @@ from verl.utils.kg_reward_base import (
     get_model_name
 )
 
+import dotenv
+dotenv.load_dotenv()
+
+os.environ["USE_LOCAL_QWEN_FOR_EVAL"] = "true"
+os.environ["LOCAL_QWEN_MODEL"] = "/mnt/afs/m2/models/Qwen2.5-72B-Instruct/"
+os.environ["VLLM_API_BASE"] = "http://10.119.16.246:9001/v1"
+
+
 # 辅助函数
 def extract_tag_content(text: str, tag: str) -> str:
     """从给定文本中提取被<tag>...</tag>标签包围的内容"""
@@ -496,6 +504,7 @@ def qwen_reasoning_score(input_data: ReasoningEvaluationInput) -> float:
             score = float(score_match.group(1))
             return score
         else:
+            print(f"[debug] Qwen reasoning evaluation failed with error: {response}")
             return 0.0  # 没有找到有效分数
             
     except Exception as e:
@@ -568,6 +577,11 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
     ground_truth_answer = ground_truth.get("ground_truth_answer", "{}")
     ground_truth_reasoning = ground_truth.get("ground_truth_reasoning", "")
     
+    
+    os.environ["USE_LOCAL_QWEN_FOR_EVAL"] = "true"
+    os.environ["LOCAL_QWEN_MODEL"] = "/mnt/afs/m2/models/Qwen2.5-72B-Instruct/"
+    os.environ["VLLM_API_BASE"] = "http://10.119.16.246:9001/v1"
+
     # 1. 格式奖励
     format_reward_result = format_reward(solution_str)
     
@@ -616,4 +630,7 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
 # 主函数：用于verl框架
 def compute_kg_extraction_reward(data_source, solution_str, ground_truth, extra_info=None):
     """知识图谱抽取奖励计算主函数"""
+    # 如果ground_truth为None或为空，创建一个空的默认值
+    if ground_truth is None:
+        ground_truth = {"ground_truth_answer": "{}", "ground_truth_reasoning": ""}
     return kg_extraction_reward(data_source, solution_str, ground_truth, extra_info) 

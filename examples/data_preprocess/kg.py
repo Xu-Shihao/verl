@@ -27,45 +27,42 @@ from verl.utils.hdfs_io import copy, makedirs
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--local_dir", default="~/data/kg_extraction")
+    parser.add_argument("--local_dir", default="./data/kg_extraction")
     parser.add_argument("--hdfs_dir", default=None)
-    parser.add_argument("--input_train", default="/mnt/afs/tanka/shihao/project/verl/data/kg_extraction/kg_extraction_train.jsonl")
-    parser.add_argument("--input_val", default="/mnt/afs/tanka/shihao/project/verl/data/kg_extraction/kg_extraction_val.jsonl")
+    parser.add_argument("--input_train", default="/mnt/afs/tanka/shihao/project/tanka-kg-extract/example_data/polished_rl_training_data_train.csv")
+    parser.add_argument("--input_val", default="/mnt/afs/tanka/shihao/project/tanka-kg-extract/example_data/polished_rl_training_data_test.csv")
 
     args = parser.parse_args()
 
     data_source = "kg_extraction"
     
     # Load the train and validation data
-    train_data = []
-    with open(args.input_train, 'r') as f:
-        for line in f:
-            train_data.append(json.loads(line))
-    
-    val_data = []
-    with open(args.input_val, 'r') as f:
-        for line in f:
-            val_data.append(json.loads(line))
+    train_data = pd.read_csv(args.input_train)
+    val_data = pd.read_csv(args.input_val)
     
     # Convert to datasets
-    train_dataset = Dataset.from_pandas(pd.DataFrame(train_data))
-    val_dataset = Dataset.from_pandas(pd.DataFrame(val_data))
+    train_dataset = Dataset.from_pandas(train_data)
+    val_dataset = Dataset.from_pandas(val_data)
     
     # Process each dataset
     def process_dataset(dataset, split):
         def process_fn(example, idx):
             # Most fields are already in the correct format in the source data
             # Just ensure we have the proper structure for consistency
-            
+    
             data = {
                 "data_source": data_source,
-                "prompt": example["prompt"],
+                "prompt": [
+                    {
+                        "role": "user",
+                        "content": example["prompt"],
+                    }
+                ],
                 "ability": "knowledge_extraction",
-                "reward_model": example["reward_model"],
+                "reward_model": {"style": "rule", "ground_truth": {"ground_truth_answer": example['api_output'], "ground_truth_reasoning": example['thinking_process']}},
                 "extra_info": {
                     "split": split,
                     "index": idx,
-                    "original_input": example.get("extra_info", {}).get("original_input", ""),
                 }
             }
             
