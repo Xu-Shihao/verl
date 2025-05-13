@@ -29,7 +29,7 @@ class NaiveRewardManager:
         self.compute_score = compute_score or _default_compute_score
         self.reward_fn_key = reward_fn_key
 
-    def __call__(self, data: DataProto, return_dict=False):
+    def __call__(self, data: DataProto, return_dict=True):
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn

@@ -2,10 +2,10 @@
 
 export DATA_DIR='/mnt/afs/tanka/shihao/project/verl/data/kg_extraction'
 
-# export WANDB_KEY=d2754e1ba5c74b981214e7b00e7569a92627ec36
-# wandb login --relogin $WANDB_KEY
+export WANDB_KEY=d8e131b9817bc59353326755d6db8b705a4d8d4d
+wandb login --relogin $WANDB_KEY
 
-WAND_PROJECT='kg_extraction_RL'
+WAND_PROJECT='kg_extraction_RL_7B'
 
 # export BASE_MODEL='Qwen/Qwen2.5-3B'
 # export EXPERIMENT_NAME=nq-search-r1-ppo-qwen2.5-3b-em
@@ -60,16 +60,16 @@ PYTHONUNBUFFERED=1 python3 -m verl.trainer.main_ppo_kg \
     critic.ppo_max_token_len_per_gpu=65572 \
     algorithm.kl_ctrl.kl_coef=0.001 \
     trainer.critic_warmup=0 \
-    trainer.logger=['console', "wandb"] \
+    trainer.logger=['console','wandb'] \
     trainer.default_hdfs_dir=null \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
-    trainer.save_freq=20 \
-    trainer.test_freq=20 \
+    trainer.save_freq=10 \
+    trainer.test_freq=1 \
     trainer.project_name=$WAND_PROJECT \
     trainer.experiment_name=$EXPERIMENT_NAME \
     trainer.total_epochs=15 \
-    trainer.total_training_steps=700 \
+    trainer.total_training_steps=500 \
     trainer.default_hdfs_dir=null \
     trainer.default_local_dir=checkpoints/$EXPERIMENT_NAME \
     2>&1 | tee "kg_extraction_$(date +%Y%m%d_%H%M%S).log"
