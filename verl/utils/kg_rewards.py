@@ -306,6 +306,10 @@ def llm_compare_extracted_graph(extracted_graph: str, ground_truth: str) -> floa
         truth_json = json.loads(ground_truth)
     except json.JSONDecodeError:
         print(f"[debug] JSON validation failed")
+        print("--------------------------------")
+        print(extracted_graph)
+        print("--------------------------------")
+        print(ground_truth)
         return 0.0
     
     # 创建Pydantic模型实例
@@ -403,6 +407,10 @@ def graph_correctness_reward(solution_str: str, ground_truth_answer: str, **kwar
     """评估抽取的图与标准图的相似度，使用LLM进行评估"""
     # 从回答中提取JSON
     extracted_json = extract_tag_content(solution_str, "answer")
+    
+    # 如果ground_truth_answer中包含<answer>和</answer>标签，则提取标签内容
+    if "<answer>" in ground_truth_answer and "</answer>" in ground_truth_answer:
+        ground_truth_answer = extract_tag_content(ground_truth_answer, "answer") 
     
     # 如果提取失败，返回0分
     if not extracted_json:
