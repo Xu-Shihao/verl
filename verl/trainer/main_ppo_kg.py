@@ -79,18 +79,18 @@ def get_custom_reward_fn(config):
     return wrapped_fn
 
 
-@hydra.main(config_path="config", config_name="kg_extraction_config", version_base=None)
+@hydra.main(config_path="config", config_name="kg_extraction_ppo_trainer", version_base=None)
 def main(config):
     """主入口函数，使用hydra加载配置并启动知识图谱抽取的PPO训练"""
     try:
         # 解析命令行参数，但不使用sys.argv（因为hydra已经处理过这些参数）
         # 仅用于打印调试信息和获取默认值
         args = argparse.ArgumentParser(description="知识图谱抽取的PPO训练")
-        args.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/verl/trainer/config/kg_extraction_config.yaml",
+        args.add_argument("--config_path", type=str, default="/mnt/afs/tanka/shihao/project/verl/verl/trainer/config/kg_extraction_ppo_trainer_debug.yaml",
                          help="自定义配置文件路径，覆盖默认配置")
-        args.add_argument("--model_path", type=str, default="/mnt/afs/tanka/shihao/model/Qwen2.5-0.5B-Instruct",
+        args.add_argument("--model_path", type=str, default="/mnt/afs/tanka/shihao/model/Qwen2.5-7B-Instruct",
                          help="基础模型路径，覆盖配置文件中的设置")
-        args.add_argument("--output_dir", type=str, default="/mnt/afs/tanka/shihao/outputs/kg_extraction_debug",
+        args.add_argument("--output_dir", type=str, default="/mnt/afs/tanka/shihao/outputs/kg_extraction",
                          help="输出目录，覆盖配置文件中的设置")
         args.add_argument("--debug", action="store_true",
                          help="调试模式，使用较小的训练配置")

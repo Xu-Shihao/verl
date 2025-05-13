@@ -27,6 +27,11 @@ def extract_tag_content(text: str, tag: str) -> str:
     """从给定文本中提取被<tag>...</tag>标签包围的内容"""
     pattern = rf"<{tag}>(.*?)</{tag}>"
     match = re.search(pattern, text, re.DOTALL)
+    
+    if not match:
+        print(f"[debug] 未找到{tag}标签")
+        print(text) 
+        
     return match.group(1).strip() if match else ""
 
 def extract_json_from_answer(answer_text: str) -> str:
@@ -38,7 +43,12 @@ def extract_json_from_answer(answer_text: str) -> str:
             json.loads(answer_content)
             return answer_content
         except json.JSONDecodeError:
+            print(f"[debug] JSON解析失败")
+            print(answer_content)
             return ""
+    if not answer_content:
+        print(f"[debug] 未找到answer标签")
+        print(answer_text) 
     return ""
 
 def extract_thinking_content(text: str) -> str:
@@ -634,3 +644,50 @@ def compute_kg_extraction_reward(data_source, solution_str, ground_truth, extra_
     if ground_truth is None:
         ground_truth = {"ground_truth_answer": "{}", "ground_truth_reasoning": ""}
     return kg_extraction_reward(data_source, solution_str, ground_truth, extra_info) 
+
+if __name__ == "__main__":
+    
+    text = """<think>
+The text contains information about a company's public holiday schedule for the first quarter of 2025. The key entities are Kim YEO (the sender), the company (the organization), and the public holiday schedule (the document). The main relationships are between the sender and the company, and between the company and the public holiday schedule.
+
+- Kim YEO is the sender of the message and the document.
+- The company is the recipient of the message and the owner of the public holiday schedule.
+- The public holiday schedule is a document that contains the information about the holidays.
+
+The relationships can be described as follows:
+1. Kim YEO (sender) -> Company (recipient): Kim YEO is sending the message and the document to the company.
+2. Company (recipient) -> Public Holiday Schedule (document): The company is receiving and distributing the public holiday schedule.
+</think>
+
+<answer>
+{
+  "nodes": [
+    {"id": 1, "label": "Kim YEO", "type": "Person"},
+    {"id": 2, "label": "Company", "type": "Organization"},
+    {"id": 3, "label": "Public Holiday Schedule", "type": "Document"}
+  ],
+  "edges": [
+    {
+      "source": 1,
+      "target": 2,
+      "relation": "Sends",
+      "description": "Kim YEO sends the message and the document to the company.",
+      "keywords": ["Kim YEO", "Company", "Message", "Document"],
+      "strength": 8,
+      "msg_ids": [0, 1]
+    },
+    {
+      "source": 2,
+      "target": 3,
+      "relation": "Receives",
+      "description": "The company receives and distributes the public holiday schedule.",
+      "keywords": ["Company", "Public Holiday Schedule", "Distributes"],
+      "strength": 8,
+      "msg_ids": [0, 1]
+    }
+  ]
+}
+</answer>"""
+    print(extract_json_from_answer(text))
+    print(extract_thinking_content(text))
+    
