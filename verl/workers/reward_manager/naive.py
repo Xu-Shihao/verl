@@ -97,7 +97,7 @@ class NaiveRewardManager:
                     for key, value in score.items():
                         print(f"[{key}]", value)
                 else:
-                    print("[score]", x)
+                    print("[score]", score)
 
         if return_dict:
             return {
