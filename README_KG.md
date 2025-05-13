@@ -48,3 +48,12 @@ python examples/data_preprocess/kg.py --local_dir ./data/kg_extraction
 python tests/kg_extract/test_local_evaluator.py
 ```
 
+### 3. Debug LLM reward值计算
+
+```
+HYDRA_FULL_ERROR=1 python verl/trainer/main_ppo_kg.py debug_locally=true
+```
+
+
+### 4. Reward 的设计
+

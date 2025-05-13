@@ -30,7 +30,6 @@ def extract_tag_content(text: str, tag: str) -> str:
     
     if not match:
         print(f"[debug] 未找到{tag}标签")
-        print(text) 
         
     return match.group(1).strip() if match else ""
 
@@ -44,20 +43,15 @@ def extract_json_from_answer(answer_text: str) -> str:
             return answer_content
         except json.JSONDecodeError:
             print(f"[debug] JSON解析失败")
-            print(answer_content)
             return ""
     if not answer_content:
         print(f"[debug] 未找到answer标签")
-        print(answer_text) 
     return ""
 
 def extract_thinking_content(text: str) -> str:
     """从<think>...</think>或<think>...</think>标签中提取思考内容"""
     # 先尝试提取<think>标签内容
     thinking = extract_tag_content(text, "think")
-    # 如果没有找到，则尝试提取<think>标签内容
-    if not thinking:
-        thinking = extract_tag_content(text, "reasoning")
     return thinking
 
 @retry(
@@ -206,10 +200,8 @@ def xml_count_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
     # 检查answer标签
     if solution_str.count("\n<answer>\n") == 1:
         count += 0.125
-        count -= len(solution_str.split("\n</answer>\n")[-1])*0.001
     if solution_str.count("\n</answer>") == 1:
         count += 0.125
-        count -= (len(solution_str.split("\n</answer>")[-1]) - 1)*0.001
     
     return {
         "score": count,
@@ -306,10 +298,6 @@ def llm_compare_extracted_graph(extracted_graph: str, ground_truth: str) -> floa
         truth_json = json.loads(ground_truth)
     except json.JSONDecodeError:
         print(f"[debug] JSON validation failed")
-        print("--------------------------------")
-        print(extracted_graph)
-        print("--------------------------------")
-        print(ground_truth)
         return 0.0
     
     # 创建Pydantic模型实例
@@ -597,8 +585,8 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
     
     
     os.environ["USE_LOCAL_QWEN_FOR_EVAL"] = "true"
-    os.environ["LOCAL_QWEN_MODEL"] = "/mnt/afs/m2/models/Qwen2.5-72B-Instruct/"
-    os.environ["VLLM_API_BASE"] = "http://10.119.16.246:9001/v1"
+    os.environ["LOCAL_QWEN_MODEL"] = "/mnt/tanka/models/Qwen2.5-32B-Instruct"
+    os.environ["VLLM_API_BASE"] = "http://10.119.21.75:9001/v1"
 
     # 1. 格式奖励
     format_reward_result = format_reward(solution_str)

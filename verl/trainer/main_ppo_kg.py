@@ -25,6 +25,7 @@ import ray
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 # from verl.trainer.ppo.reward import load_reward_manager
 from verl.utils.kg_rewards import compute_kg_extraction_reward
+from verl.utils.dataset.rl_dataset import collate_fn
 
 import dotenv
 dotenv.load_dotenv()
@@ -262,7 +263,7 @@ class TaskRunner:
             raise NotImplementedError
         
         compute_score = compute_kg_extraction_reward
-        reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=0,          
+        reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1,          
                                        compute_score=compute_score)
 
         val_reward_fn = reward_manager_cls(tokenizer=tokenizer, num_examine=1, 
@@ -270,12 +271,6 @@ class TaskRunner:
         
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
         
-        from verl.utils.dataset.rl_dataset import collate_fn
-        
-        train_dataset = create_rl_dataset(config.data.train_files, config.data, tokenizer, processor)
-        val_dataset = create_rl_dataset(config.data.val_files, config.data, tokenizer, processor)
-        train_sampler = create_rl_sampler(config.data, train_dataset)
-
         # 步骤9: 创建PPO训练器并开始训练
         trainer = RayPPOTrainer(
             config=config,
@@ -286,10 +281,7 @@ class TaskRunner:
             ray_worker_group_cls=ray_worker_group_cls,
             reward_fn=reward_fn,
             val_reward_fn=val_reward_fn,
-            train_dataset=train_dataset,
-            val_dataset=val_dataset,
             collate_fn=collate_fn,
-            train_sampler=train_sampler,
         )
         trainer.init_workers()
         await trainer.fit()
