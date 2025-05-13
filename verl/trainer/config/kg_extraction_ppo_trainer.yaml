@@ -6,9 +6,9 @@ data:
   val_path: /mnt/afs/tanka/shihao/project/verl/data/kg_extraction/val.parquet  # 验证集路径
   prompt_key: prompt  # 输入提示在数据中的键名
   reward_fn_key: data_source  # 奖励函数在数据中的键名
-  max_prompt_length: 4095  # 最大提示长度（token数）
-  max_response_length: 4095  # 最大响应长度（token数）
-  train_batch_size: 128  # 训练批次大小
+  max_prompt_length: 4096  # 最大提示长度（token数）
+  max_response_length: 4096  # 最大响应长度（token数）
+  train_batch_size: 4096  # 训练批次大小
   val_batch_size: 32  # 验证批次大小
   return_raw_input_ids: False  # 是否返回原始输入ID
   return_raw_chat: False  # 是否返回原始对话内容
@@ -27,17 +27,15 @@ actor_rollout_ref:
     external_lib: null  # 外部库路径
     override_config: { }  # 覆盖模型配置的字典
     enable_gradient_checkpointing: True  # 是否启用梯度检查点以节省显存
-    use_remove_padding: False  # 是否移除填充以提高效率
+    use_remove_padding: True  # 是否移除填充以提高效率
     use_liger: False  # 是否使用Liger优化
   actor:
     strategy: fsdp  # 分布式策略（完全分片数据并行）
-    ppo_mini_batch_size: 128  # PPO小批次大小
-    ppo_micro_batch_size: 32  # PPO微批次大小
-    ppo_micro_batch_size_per_gpu: null  # 每个GPU的PPO微批次大小
-    micro_batch_size: 8  # 微批次大小
-    micro_batch_size_per_gpu: null  # 每个GPU的微批次大小
-    use_dynamic_bsz: False  # 是否使用动态批次大小
-    ppo_max_token_len_per_gpu: 16384  # 每个GPU的最大token长度
+    ppo_mini_batch_size: 256  # PPO小批次大小
+    ppo_micro_batch_size: null  # PPO微批次大小
+    ppo_micro_batch_size_per_gpu: 16  # 每个GPU的PPO微批次大小
+    use_dynamic_bsz: True  # 是否使用动态批次大小
+    ppo_max_token_len_per_gpu: 24000  # 每个GPU的最大token长度
     grad_clip: 1.0  # 梯度裁剪值
     clip_ratio: 0.2  # PPO裁剪比率
     clip_ratio_low: 0.2  # PPO裁剪比率下限
@@ -45,11 +43,11 @@ actor_rollout_ref:
     clip_ratio_c: 3.0  # 双裁剪PPO的下限值
     loss_agg_mode: "token-mean"  # 损失聚合模式（token平均）
     entropy_coeff: 0.0  # 熵系数
-    use_kl_loss: true  # 是否使用KL散度损失
+    use_kl_loss: False  # 是否使用KL散度损失
     use_torch_compile: True  # 是否使用torch编译优化
     kl_loss_coef: 0.01  # KL散度损失系数
     kl_loss_type: low_var_kl  # KL散度损失类型
-    ppo_epochs: 4  # PPO训练周期数
+    ppo_epochs: 1  # PPO训练周期数
     shuffle: False  # 是否打乱PPO样本
     ulysses_sequence_parallel_size: 1  # 序列并行大小
     checkpoint:
@@ -96,7 +94,7 @@ actor_rollout_ref:
     prompt_length: ${data.max_prompt_length}  # 提示长度
     response_length: ${data.max_response_length}  # 响应长度
     dtype: bfloat16  # 数据类型
-    gpu_memory_utilization: 0.5  # GPU内存使用率
+    gpu_memory_utilization: 0.6  # GPU内存使用率
     ignore_eos: False  # 是否忽略结束标记
     enforce_eager: True  # 是否强制即时执行
     free_cache_engine: True  # 是否释放引擎缓存
@@ -105,10 +103,10 @@ actor_rollout_ref:
     max_num_batched_tokens: 16384  # 最大批处理token数
     max_model_len: null  # 最大模型长度
     max_num_seqs: 1024  # 最大序列数
-    log_prob_micro_batch_size: 2  # 日志概率微批次大小
-    log_prob_micro_batch_size_per_gpu: null  # 每个GPU的日志概率微批次大小
+    log_prob_micro_batch_size: null  # 日志概率微批次大小
+    log_prob_micro_batch_size_per_gpu: 16  # 每个GPU的日志概率微批次大小
     log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}  # 日志概率是否使用动态批次大小
-    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}  # 每个GPU的日志概率最大token长度
+    log_prob_max_token_len_per_gpu: 24000  # 每个GPU的日志概率最大token长度
     disable_log_stats: True  # 是否禁用日志统计
     enable_chunked_prefill: True  # 是否启用分块预填充
     do_sample: True  # 是否进行采样
@@ -143,7 +141,7 @@ critic:
     override_config: { }  # 覆盖配置
     external_lib: ${actor_rollout_ref.model.external_lib}  # 外部库
     enable_gradient_checkpointing: True  # 是否启用梯度检查点
-    use_remove_padding: False  # 是否移除填充
+    use_remove_padding: True  # 是否移除填充
     fsdp_config:
       param_offload: False  # 是否卸载参数到CPU
       optimizer_offload: False  # 是否卸载优化器到CPU
@@ -155,14 +153,12 @@ critic:
         min_num_params: 0  # 最小参数数量
       fsdp_size: -1  # FSDP大小
   ppo_mini_batch_size: ${actor_rollout_ref.actor.ppo_mini_batch_size}  # PPO小批次大小
-  ppo_micro_batch_size: 16  # PPO微批次大小
-  ppo_micro_batch_size_per_gpu: null  # 每个GPU的PPO微批次大小
-  micro_batch_size: 8  # 微批次大小
-  micro_batch_size_per_gpu: null  # 每个GPU的微批次大小
+  ppo_micro_batch_size: null  # PPO微批次大小
+  ppo_micro_batch_size_per_gpu: 16  # 每个GPU的PPO微批次大小
   forward_micro_batch_size: ${critic.ppo_micro_batch_size}  # 前向传播微批次大小
   forward_micro_batch_size_per_gpu: ${critic.ppo_micro_batch_size_per_gpu}  # 每个GPU的前向传播微批次大小
   use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}  # 是否使用动态批次大小
-  ppo_max_token_len_per_gpu: 32768  # 每个GPU的最大token长度
+  ppo_max_token_len_per_gpu: 98304  # 每个GPU的最大token长度
   forward_max_token_len_per_gpu: ${critic.ppo_max_token_len_per_gpu}  # 每个GPU的前向传播最大token长度
   ulysses_sequence_parallel_size: 1  # 序列并行大小
   ppo_epochs: ${actor_rollout_ref.actor.ppo_epochs}  # PPO训练周期数
@@ -186,7 +182,7 @@ reward_model:
       param_offload: False  # 是否卸载参数到CPU
       reshard_after_forward: True  # 前向传播后是否重新分片
       fsdp_size: -1  # FSDP大小
-  micro_batch_size: 1  # 微批次大小
+  micro_batch_size: null  # 微批次大小
   micro_batch_size_per_gpu: null  # 每个GPU的微批次大小
   max_length: null  # 最大长度
   ulysses_sequence_parallel_size: 1  # 序列并行大小
@@ -206,7 +202,7 @@ algorithm:
   lam: 0.95  # GAE lambda参数
   adv_estimator: gae  # 优势估计器类型
   norm_adv_by_std_in_grpo: True  # 是否在GRPO中通过标准差归一化优势
-  use_kl_in_reward: true  # 是否在奖励中使用KL散度
+  use_kl_in_reward: false  # 是否在奖励中使用KL散度
   kl_penalty: kl  # KL惩罚类型
   kl_ctrl:
     type: fixed  # KL控制类型
@@ -216,7 +212,7 @@ algorithm:
 
 trainer:
   balance_batch: True  # 是否平衡批次
-  total_epochs: 100  # 总训练周期数
+  total_epochs: 15  # 总训练周期数
   total_training_steps: null  # 总训练步数
   project_name: kg_extraction_RL  # 项目名称
   experiment_name: RL_with_Qwen2.5-7B-Instruct  # 实验名称
@@ -226,11 +222,11 @@ trainer:
   validation_data_dir: null  # 验证数据目录
   nnodes: 1  # 节点数量
   n_gpus_per_node: 8  # 每个节点的GPU数量
-  save_freq: 10  # 保存频率
+  save_freq: 20  # 保存频率
   resume_mode: auto  # 恢复模式
   resume_from_path: null  # 恢复路径
-  val_before_train: True  # 是否在训练前进行验证
-  test_freq: 1  # 测试频率
+  val_before_train: False  # 是否在训练前进行验证
+  test_freq: 5  # 测试频率
   critic_warmup: 0  # 评论模型预热
   default_hdfs_dir: null  # 默认HDFS目录
   del_local_ckpt_after_load: False  # 加载后是否删除本地检查点
