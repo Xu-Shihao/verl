@@ -154,8 +154,7 @@ def run_ppo(config) -> None:
         print("断点应该可以正常工作")
         print("=========================\n")
         runner = LocalTaskRunner()
-        import asyncio
-        asyncio.run(runner.run(config))
+        runner.run(config)  # 直接调用，不使用asyncio.run
     else:
         # 正常Ray远程执行模式
         runner = TaskRunner.remote()
@@ -166,7 +165,7 @@ def run_ppo(config) -> None:
 class TaskRunner:
     """Ray远程任务运行器，负责执行PPO训练的实际任务"""
     
-    async def run(self, config):
+    def run(self, config):
         """
         运行PPO训练任务
         
@@ -284,14 +283,14 @@ class TaskRunner:
             collate_fn=collate_fn,
         )
         trainer.init_workers()
-        await trainer.fit()
+        trainer.fit()
 
 
 # 本地调试版本的TaskRunner，无Ray装饰器
 class LocalTaskRunner:
     """本地任务运行器，用于调试时在主进程中执行，支持断点调试"""
     
-    async def run(self, config):
+    def run(self, config):
         """
         运行PPO训练任务
         
@@ -388,7 +387,7 @@ class LocalTaskRunner:
         # from verl.trainer.ppo.ray_trainer import RayPPOTrainer
         # trainer = RayPPOTrainer(...)
         # trainer.init_workers()
-        # await trainer.fit()
+        # trainer.fit()  # 移除await关键字
         
         return
 

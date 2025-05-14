@@ -17,17 +17,17 @@ from verl.utils.kg_reward_base import (
 import dotenv
 dotenv.load_dotenv()
 
-os.environ["USE_LOCAL_QWEN_FOR_EVAL"] = "true"
-os.environ["LOCAL_QWEN_MODEL"] = "/mnt/afs/m2/models/Qwen2.5-72B-Instruct/"
-os.environ["VLLM_API_BASE"] = "http://10.119.16.246:9001/v1"
-
-
 # 辅助函数
 def extract_tag_content(text: str, tag: str) -> str:
     """从给定文本中提取被<tag>...</tag>标签包围的内容"""
     pattern = rf"<{tag}>(.*?)</{tag}>"
     match = re.search(pattern, text, re.DOTALL)
     
+    
+    if not match:
+        print(f"[debug] 未找到{tag}标签")
+        
+
     if not match:
         print(f"[debug] 未找到{tag}标签")
         
@@ -52,6 +52,11 @@ def extract_thinking_content(text: str) -> str:
     """从<think>...</think>或<think>...</think>标签中提取思考内容"""
     # 先尝试提取<think>标签内容
     thinking = extract_tag_content(text, "think")
+    if not thinking:
+        print(f"[debug] 未找到think标签")
+        print("=========================")
+        print(text)
+        print("=========================")
     return thinking
 
 @retry(
@@ -224,7 +229,7 @@ def soft_format_reward_func(completions, **kwargs) -> list[float]:
 
 def strict_format_reward(solution_str: str, **kwargs) -> Dict[str, Any]:
     """检查输出是否符合严格的XML格式要求"""
-    pattern = r"^<think>\n.*?\n</think>\n<answer>\n.*?\n</answer>\n$"
+    pattern = r"^<think>\n.*?\n</think>.*?<answer>\n.*?\n</answer>\n$"
     match = re.match(pattern, solution_str, re.DOTALL)
     score = 0.5 if match else 0.0
     
@@ -613,6 +618,11 @@ def kg_extraction_reward(data_source: str, solution_str: str, ground_truth: dict
     soft_format_weight = 0.05
     graph_weight = 0.6
     reasoning_weight = 0.2
+    
+    # 如果strict_format_score为0，则graph_weight和reasoning_weight都为0
+    if strict_format_result["score"] == 0:
+        graph_weight = 0.0
+        reasoning_weight = 0.0
     
     total_score = (
         format_reward_result["score"] * format_weight +

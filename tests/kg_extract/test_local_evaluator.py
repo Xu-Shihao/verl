@@ -60,9 +60,9 @@ TEST_REASONING_VARIANT = """
 def main():
     """主函数"""
     parser = argparse.ArgumentParser(description="测试本地vLLM API服务的Qwen模型评估功能")
-    parser.add_argument("--model_name", type=str, default="/mnt/afs/m2/models/Qwen2.5-72B-Instruct/",
+    parser.add_argument("--model_name", type=str, default="/mnt/afs/m2/models/Qwen2.5-32B-Instruct/",
                         help="Qwen模型名称")
-    parser.add_argument("--api_base", type=str, default="http://10.119.16.246:9001/v1",
+    parser.add_argument("--api_base", type=str, default="http://10.119.21.75:9001/v1",
                         help="vLLM API服务地址")
     args = parser.parse_args()
     
