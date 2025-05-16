@@ -1,0 +1,243 @@
+data:
+  tokenizer: null  # 分词器路径，为空则使用模型默认分词器
+  train_files: ${data.train_path}  # 训练数据文件路径
+  val_files: ${data.val_path}  # 验证数据文件路径
+  train_path: /mnt/afs/tanka/shihao/project/verl/data/kg_extraction/train.parquet  # 训练集路径
+  val_path: /mnt/afs/tanka/shihao/project/verl/data/kg_extraction/val.parquet  # 验证集路径
+  prompt_key: prompt  # 输入提示在数据中的键名
+  reward_fn_key: data_source  # 奖励函数在数据中的键名
+  max_prompt_length: 4096  # 最大提示长度（token数）
+  max_response_length: 4096  # 最大响应长度（token数）
+  train_batch_size: 4096  # 训练批次大小
+  val_batch_size: 32  # 验证批次大小
+  return_raw_input_ids: False  # 是否返回原始输入ID
+  return_raw_chat: False  # 是否返回原始对话内容
+  shuffle: True  # 是否打乱数据集
+  filter_overlong_prompts: true  # 是否过滤过长的提示
+  filter_overlong_prompts_workers: 1  # 用于过滤过长提示的工作进程数
+  truncation: error  # 截断策略（出错时报错）
+  image_key: images  # 图像数据在数据集中的键名
+  video_key: videos  # 视频数据在数据集中的键名
+  trust_remote_code: true  # 是否信任远程代码
+
+actor_rollout_ref:
+  hybrid_engine: True  # 是否使用混合引擎
+  model:
+    path: /mnt/afs/tanka/shihao/model/Qwen2.5-7B-Instruct  # 模型路径
+    external_lib: null  # 外部库路径
+    override_config: { }  # 覆盖模型配置的字典
+    enable_gradient_checkpointing: True  # 是否启用梯度检查点以节省显存
+    use_remove_padding: True  # 是否移除填充以提高效率
+    use_liger: False  # 是否使用Liger优化
+  actor:
+    strategy: fsdp  # 分布式策略（完全分片数据并行）
+    ppo_mini_batch_size: 256  # PPO小批次大小
+    ppo_micro_batch_size: null  # PPO微批次大小
+    ppo_micro_batch_size_per_gpu: 16  # 每个GPU的PPO微批次大小
+    use_dynamic_bsz: True  # 是否使用动态批次大小
+    ppo_max_token_len_per_gpu: 24000  # 每个GPU的最大token长度
+    grad_clip: 1.0  # 梯度裁剪值
+    clip_ratio: 0.2  # PPO裁剪比率
+    clip_ratio_low: 0.2  # PPO裁剪比率下限
+    clip_ratio_high: 0.2  # PPO裁剪比率上限
+    clip_ratio_c: 3.0  # 双裁剪PPO的下限值
+    loss_agg_mode: "token-mean"  # 损失聚合模式（token平均）
+    entropy_coeff: 0.0  # 熵系数
+    use_kl_loss: False  # 是否使用KL散度损失
+    use_torch_compile: True  # 是否使用torch编译优化
+    kl_loss_coef: 0.01  # KL散度损失系数
+    kl_loss_type: low_var_kl  # KL散度损失类型
+    ppo_epochs: 1  # PPO训练周期数
+    shuffle: False  # 是否打乱PPO样本
+    ulysses_sequence_parallel_size: 1  # 序列并行大小
+    checkpoint:
+      contents: ['model', 'optimizer', 'extra']  # 检查点包含内容
+    optim:
+      lr: 1e-6  # 学习率
+      lr_warmup_steps: -1  # 学习率预热步数
+      lr_warmup_steps_ratio: 0.0  # 学习率预热步数比例
+      min_lr_ratio: null  # 最小学习率比例
+      warmup_style: constant  # 预热风格（恒定）
+      total_training_steps: -1  # 总训练步数
+      weight_decay: 0.01  # 权重衰减
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0  # 最小参数数量
+      param_offload: False  # 是否卸载参数到CPU
+      optimizer_offload: False  # 是否卸载优化器到CPU
+      offload_policy: False  # 卸载策略
+      reshard_after_forward: true  # 前向传播后是否重新分片
+      move_params_to_cpu: false  # 是否将参数移动到CPU
+      state_dict_type: full  # 状态字典类型
+      fsdp_size: -1  # FSDP大小
+  ref:
+    strategy: fsdp  # 参考模型分布式策略
+    fsdp_config:
+      param_offload: False  # 是否卸载参数到CPU
+      reshard_after_forward: True  # 前向传播后是否重新分片
+      wrap_policy:
+        min_num_params: 0  # 最小参数数量
+    use_torch_compile: ${actor_rollout_ref.actor.use_torch_compile}  # 是否使用torch编译优化
+    log_prob_micro_batch_size: 8  # 日志概率微批次大小
+    log_prob_micro_batch_size_per_gpu: null  # 每个GPU的日志概率微批次大小
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}  # 日志概率是否使用动态批次大小
+    log_prob_max_token_len_per_gpu: ${actor_rollout_ref.actor.ppo_max_token_len_per_gpu}  # 每个GPU的日志概率最大token长度
+    ulysses_sequence_parallel_size: ${actor_rollout_ref.actor.ulysses_sequence_parallel_size}  # 序列并行大小
+  rollout:
+    name: vllm  # 推理引擎名称
+    mode: sync  # 同步或异步模式
+    chat_scheduler: null  # 聊天调度器
+    temperature: 1  # 采样温度
+    top_k: -1  # Top-K采样参数
+    top_p: 1  # Top-P采样参数
+    use_fire_sampling: False  # 是否使用FIRE采样方法
+    prompt_length: ${data.max_prompt_length}  # 提示长度
+    response_length: ${data.max_response_length}  # 响应长度
+    dtype: bfloat16  # 数据类型
+    gpu_memory_utilization: 0.6  # GPU内存使用率
+    ignore_eos: False  # 是否忽略结束标记
+    enforce_eager: True  # 是否强制即时执行
+    free_cache_engine: True  # 是否释放引擎缓存
+    load_format: dummy_dtensor  # 加载格式
+    tensor_model_parallel_size: 1  # 张量模型并行大小
+    max_num_batched_tokens: 16384  # 最大批处理token数
+    max_model_len: null  # 最大模型长度
+    max_num_seqs: 1024  # 最大序列数
+    log_prob_micro_batch_size: null  # 日志概率微批次大小
+    log_prob_micro_batch_size_per_gpu: 16  # 每个GPU的日志概率微批次大小
+    log_prob_use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}  # 日志概率是否使用动态批次大小
+    log_prob_max_token_len_per_gpu: 24000  # 每个GPU的日志概率最大token长度
+    disable_log_stats: True  # 是否禁用日志统计
+    enable_chunked_prefill: True  # 是否启用分块预填充
+    do_sample: True  # 是否进行采样
+    n: 1  # 生成回复的数量
+    engine_kwargs:
+      swap_space: null  # 交换空间大小
+    val_kwargs:
+      top_k: -1  # 验证时的Top-K参数
+      top_p: 1.0  # 验证时的Top-P参数
+      temperature: 0  # 验证时的温度
+      n: 1  # 验证时生成回复的数量
+      do_sample: False  # 验证时是否进行采样
+    multi_turn:
+      enable: False  # 是否启用多轮对话
+      max_turns: null  # 最大对话轮数
+      tool_config_path: null  # 工具配置路径
+      format: chatml  # 对话格式
+
+critic:
+  rollout_n: ${actor_rollout_ref.rollout.n}  # 评论模型采样数量
+  strategy: fsdp  # 分布式策略
+  optim:
+    lr: 1e-5  # 学习率
+    lr_warmup_steps_ratio: 0.0  # 学习率预热步数比例
+    min_lr_ratio: null  # 最小学习率比例
+    warmup_style: constant  # 预热风格
+    total_training_steps: -1  # 总训练步数
+    weight_decay: 0.01  # 权重衰减
+  model:
+    path: /mnt/afs/tanka/shihao/model/Qwen2.5-7B-Instruct  # 模型路径
+    tokenizer_path: ${actor_rollout_ref.model.path}  # 分词器路径
+    override_config: { }  # 覆盖配置
+    external_lib: ${actor_rollout_ref.model.external_lib}  # 外部库
+    enable_gradient_checkpointing: True  # 是否启用梯度检查点
+    use_remove_padding: True  # 是否移除填充
+    fsdp_config:
+      param_offload: False  # 是否卸载参数到CPU
+      optimizer_offload: False  # 是否卸载优化器到CPU
+      offload_policy: False  # 卸载策略
+      reshard_after_forward: true  # 前向传播后是否重新分片
+      move_params_to_cpu: false  # 是否将参数移动到CPU
+      state_dict_type: full  # 状态字典类型
+      wrap_policy:
+        min_num_params: 0  # 最小参数数量
+      fsdp_size: -1  # FSDP大小
+  ppo_mini_batch_size: ${actor_rollout_ref.actor.ppo_mini_batch_size}  # PPO小批次大小
+  ppo_micro_batch_size: null  # PPO微批次大小
+  ppo_micro_batch_size_per_gpu: 16  # 每个GPU的PPO微批次大小
+  forward_micro_batch_size: ${critic.ppo_micro_batch_size}  # 前向传播微批次大小
+  forward_micro_batch_size_per_gpu: ${critic.ppo_micro_batch_size_per_gpu}  # 每个GPU的前向传播微批次大小
+  use_dynamic_bsz: ${actor_rollout_ref.actor.use_dynamic_bsz}  # 是否使用动态批次大小
+  ppo_max_token_len_per_gpu: 98304  # 每个GPU的最大token长度
+  forward_max_token_len_per_gpu: ${critic.ppo_max_token_len_per_gpu}  # 每个GPU的前向传播最大token长度
+  ulysses_sequence_parallel_size: 1  # 序列并行大小
+  ppo_epochs: ${actor_rollout_ref.actor.ppo_epochs}  # PPO训练周期数
+  shuffle: ${actor_rollout_ref.actor.shuffle}  # 是否打乱PPO样本
+  grad_clip: 1.0  # 梯度裁剪值
+  cliprange_value: 0.5  # 值函数裁剪范围
+  checkpoint:
+    contents: ['model', 'optimizer', 'extra']  # 检查点包含内容
+
+reward_model:
+  enable: False  # 是否启用奖励模型
+  strategy: fsdp  # 分布式策略
+  model:
+    input_tokenizer: ${actor_rollout_ref.model.path}  # 输入分词器路径
+    path: ${actor_rollout_ref.model.path}  # 模型路径
+    external_lib: ${actor_rollout_ref.model.external_lib}  # 外部库
+    use_remove_padding: False  # 是否移除填充
+    fsdp_config:
+      wrap_policy:
+        min_num_params: 0  # 最小参数数量
+      param_offload: False  # 是否卸载参数到CPU
+      reshard_after_forward: True  # 前向传播后是否重新分片
+      fsdp_size: -1  # FSDP大小
+  micro_batch_size: null  # 微批次大小
+  micro_batch_size_per_gpu: null  # 每个GPU的微批次大小
+  max_length: null  # 最大长度
+  ulysses_sequence_parallel_size: 1  # 序列并行大小
+  use_dynamic_bsz: ${critic.use_dynamic_bsz}  # 是否使用动态批次大小
+  forward_max_token_len_per_gpu: ${critic.forward_max_token_len_per_gpu}  # 每个GPU的前向传播最大token长度
+  reward_manager: naive  # 奖励管理器类型
+  launch_reward_fn_async: False  # 是否异步启动奖励函数
+
+custom_reward_function:
+  path: /mnt/afs/tanka/shihao/project/verl/verl/utils/kg_rewards.py  # 自定义奖励函数路径
+  name: compute_kg_extraction_reward  # 奖励函数名称
+  reward_kwargs:
+    threshold: 0.5  # 奖励阈值
+
+algorithm:
+  gamma: 1.0  # 折扣因子
+  lam: 0.95  # GAE lambda参数
+  adv_estimator: gae  # 优势估计器类型
+  norm_adv_by_std_in_grpo: True  # 是否在GRPO中通过标准差归一化优势
+  use_kl_in_reward: false  # 是否在奖励中使用KL散度
+  kl_penalty: kl  # KL惩罚类型
+  kl_ctrl:
+    type: fixed  # KL控制类型
+    kl_coef: 0.1  # KL系数
+    horizon: 10000  # 地平线
+    target_kl: 0.2  # 目标KL散度
+
+trainer:
+  balance_batch: True  # 是否平衡批次
+  total_epochs: 15  # 总训练周期数
+  total_training_steps: null  # 总训练步数
+  project_name: kg_extraction_RL  # 项目名称
+  experiment_name: RL_with_Qwen2.5-7B-Instruct  # 实验名称
+  logger: [ 'console', 'wandb' ]  # 日志记录器
+  log_val_generations: 0  # 记录验证生成的数量
+  rollout_data_dir: null  # 推理数据目录
+  validation_data_dir: null  # 验证数据目录
+  nnodes: 1  # 节点数量
+  n_gpus_per_node: 8  # 每个节点的GPU数量
+  save_freq: 20  # 保存频率
+  resume_mode: auto  # 恢复模式
+  resume_from_path: null  # 恢复路径
+  val_before_train: False  # 是否在训练前进行验证
+  test_freq: 5  # 测试频率
+  critic_warmup: 0  # 评论模型预热
+  default_hdfs_dir: null  # 默认HDFS目录
+  del_local_ckpt_after_load: False  # 加载后是否删除本地检查点
+  default_local_dir: checkpoints/${trainer.project_name}/${trainer.experiment_name}  # 默认本地目录
+  max_actor_ckpt_to_keep: null  # 保留的actor检查点最大数量
+  max_critic_ckpt_to_keep: null  # 保留的critic检查点最大数量
+  ray_wait_register_center_timeout: 300  # Ray等待注册中心超时时间
+  output_dir: /mnt/afs/tanka/shihao/outputs/kg_extraction  # 输出目录
+
+ray_init:
+  num_cpus: 32  # CPU数量
+
+quick_test_mode: false  # 是否启用快速测试模式
+debug_locally: false  # 是否在本地调试
