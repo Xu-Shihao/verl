@@ -679,8 +679,8 @@ class RayPPOTrainer:
                     # evaluate using reward_function
                     # for certain reward function (e.g. sandbox), the generation can overlap with reward
                     reward_tensor = self.val_reward_fn(test_batch)
-                    print(f'type of reward_tensor : {type(reward_tensor)}')
-                    print(f'reward_tensor: {reward_tensor}')
+                    print(f'reward_tensor : {type(reward_tensor)}, {reward_tensor.shape}')
+                    # print(f'reward_tensor: {reward_tensor}')
                     
                     
                     reward_tensor_lst.append(reward_tensor)
@@ -688,7 +688,10 @@ class RayPPOTrainer:
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
-        reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (batch_size,)
+        for i in range(len(reward_tensor_lst)):
+            print(f'Overall reward_tensor {i}: {reward_tensor_lst[i]}')
+            
+        reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (val_batch_size, )
         data_sources = np.concatenate(data_source_lst, axis=0)
 
         # evaluate test_score based on data source
