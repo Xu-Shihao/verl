@@ -347,7 +347,7 @@ def compute_score_em_kgqa(solution_str, ground_truth, format_score=0., score=1.,
         print(f"Format Score: {format_score}")
         print(f"Solution string: {solution_str}")
     
-    return rw_score
+    return {"score": rw_score, "format_score": format_score}
 
 def compute_score_em_rag(solution_str, ground_truth, question_raw='', path='', stage='train'):
     """Scoring function for knowledge graph search with exact matching.
@@ -387,7 +387,7 @@ def compute_score_em_rag(solution_str, ground_truth, question_raw='', path='', s
         print(f"Path: {path}")
         print(f"Solution string: {solution_str}")
     
-    return rw_score
+    return {"score": rw_score, "format_score": format_score}
 
 
 def lightrag_format_check2(solution_str):
@@ -410,10 +410,11 @@ def lightrag_format_check2(solution_str):
     """
     # Strip leading/trailing whitespace
     solution_str = solution_str.strip()
+    rw_score = 0
     
     # Check if starts with <think> and ends with </answer>
     if not solution_str.startswith('<think>') or not solution_str.endswith('</answer>'):
-        return 0.1
+        rw_score = 0.1
 
     # Check for at least two different tool calls in <search> tags
     search_pattern = r'<search>(.*?)</search>'
@@ -424,9 +425,9 @@ def lightrag_format_check2(solution_str):
             if search_item.group(1).strip() == '':
                 empty_str_cnt += 1
     if empty_str_cnt != len(search_matches):
-        return 0.1
+        rw_score = 0.1
     
-    return 1.0
+    return {"score": rw_score, "format_score": 0}
 
 
 def compute_score_lightrag_em2(solution_str, ground_truth, format_score=0., score=1., stage='train'):

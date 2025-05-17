@@ -558,6 +558,8 @@ class RayPPOTrainer:
     def _validate(self):
         reward_tensor_lst = []
         data_source_lst = []
+        reward_extra_infos_dict: dict[str, list] = defaultdict(list)
+        
         num_gpus = self.config.trainer.n_gpus_per_node * self.config.trainer.nnodes
         gen_config = GenerationConfig(
             max_turns=self.config.max_turns,
@@ -639,14 +641,17 @@ class RayPPOTrainer:
                 test_batch = test_batch.union(test_output_gen_batch)
 
                 # evaluate using reward_function
-                reward_tensor = self.val_reward_fn(test_batch)
-
-                # Store scores
+                result = self.val_reward_fn(test_batch, return_dict=True)
+                reward_tensor = result["reward_tensor"]
                 scores = reward_tensor.sum(-1).cpu().tolist()
                 sample_scores.extend(scores)
 
-                reward_tensor_lst.append(reward_tensor)
-                data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+                reward_extra_infos_dict["reward"].extend(scores)
+                if "reward_extra_info" in result:
+                    for key, lst in result["reward_extra_info"].items():
+                        reward_extra_infos_dict[key].extend(lst)
+
+                data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
         else:
             for batch_dict in self.val_dataloader:
                 timing_raw = {}
@@ -677,34 +682,65 @@ class RayPPOTrainer:
                         test_batch.batch[key] = test_batch.batch[key].long()
                     
                     # evaluate using reward_function
-                    # for certain reward function (e.g. sandbox), the generation can overlap with reward
-                    reward_tensor = self.val_reward_fn(test_batch)
-                    print(f'reward_tensor : {type(reward_tensor)}, {reward_tensor.shape}')
-                    # print(f'reward_tensor: {reward_tensor}')
+                    result = self.val_reward_fn(test_batch, return_dict=True)
+                    reward_tensor = result["reward_tensor"]
+                    scores = reward_tensor.sum(-1).cpu().tolist()
+                    sample_scores.extend(scores)
+
+                    # pad to be divisible by dp_size
+                    test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
+                    test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+
+                    # unpad
+                    test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
                     
+                    # Store original inputs
+                    input_ids = test_batch.batch['input_ids']
+                    input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+                    sample_inputs.extend(input_texts)
                     
-                    reward_tensor_lst.append(reward_tensor)
-                    data_source_lst.append(test_batch.non_tensor_batch.get('data_source', ['unknown'] * reward_tensor.shape[0]))
+                    output_ids = test_output_gen_batch.batch['responses']
+                    output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+                    sample_outputs.extend(output_texts)
+                    
+                    reward_extra_infos_dict["reward"].extend(scores)
+                    if "reward_extra_info" in result:
+                        for key, lst in result["reward_extra_info"].items():
+                            reward_extra_infos_dict[key].extend(lst)
+                            
+                    data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
-        for i in range(len(reward_tensor_lst)):
-            print(f'Overall reward_tensor {i}: {reward_tensor_lst[i]}')
-            
-        reward_tensor = torch.cat(reward_tensor_lst, dim=0).sum(-1).cpu()  # (val_batch_size, )
+        # dump generations
+        val_data_dir = self.config.trainer.get("validation_data_dir", None)
+        if val_data_dir:
+            self._dump_generations(
+                inputs=sample_inputs,
+                outputs=sample_outputs,
+                scores=sample_scores,
+                reward_extra_infos_dict=reward_extra_infos_dict,
+                dump_path=val_data_dir,
+            )
+
+        for key_info, lst in reward_extra_infos_dict.items():
+            assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
+
         data_sources = np.concatenate(data_source_lst, axis=0)
 
-        # evaluate test_score based on data source
-        data_source_reward = {}
-        for i in range(reward_tensor.shape[0]):
-            data_source = data_sources[i]
-            if data_source not in data_source_reward:
-                data_source_reward[data_source] = []
-            data_source_reward[data_source].append(reward_tensor[i].item())
-
+        data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
-        for data_source, rewards in data_source_reward.items():
-            metric_dict[f'val/test_score/{data_source}'] = np.mean(rewards)
+        for data_source, var2metric2val in data_src2var2metric2val.items():
+            core_var = "acc" if "acc" in var2metric2val else "reward"
+            for var_name, metric2val in var2metric2val.items():
+                n_max = max([int(name.split("@")[-1].split("/")[0]) for name in metric2val.keys()])
+                for metric_name, metric_val in metric2val.items():
+                    if (var_name == core_var) and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"]) and (f"@{n_max}" in metric_name):
+                        metric_sec = "val-core"
+                    else:
+                        metric_sec = "val-aux"
+                    pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
+                    metric_dict[pfx] = metric_val
 
         return metric_dict
 
@@ -1068,20 +1104,24 @@ class RayPPOTrainer:
                         batch.batch['token_level_scores'] = reward_tensor
 
                         # compute rewards. apply_kl_penalty if available
-                        if not self.config.actor_rollout_ref.actor.get('use_kl_loss', False):
-                            batch, kl_metrics = apply_kl_penalty(batch,
-                                                                 kl_ctrl=self.kl_ctrl,
-                                                                 kl_penalty=self.config.algorithm.kl_penalty)
+                        if self.config.algorithm.use_kl_in_reward:
+                            batch, kl_metrics = apply_kl_penalty(batch, kl_ctrl=self.kl_ctrl_in_reward, kl_penalty=self.config.algorithm.kl_penalty)
                             metrics.update(kl_metrics)
                         else:
-                            batch.batch['token_level_rewards'] = batch.batch['token_level_scores']
+                            batch.batch["token_level_rewards"] = batch.batch["token_level_scores"]
 
-                        # compute advantages, executed on the driver process
-                        batch = compute_advantage(batch,
-                                                  adv_estimator=self.config.algorithm.adv_estimator,
-                                                  gamma=self.config.algorithm.gamma,
-                                                  lam=self.config.algorithm.lam,
-                                                  num_repeat=self.config.actor_rollout_ref.rollout.n)
+                        norm_adv_by_std_in_grpo = self.config.algorithm.get("norm_adv_by_std_in_grpo", True)  # GRPO adv normalization factor
+
+                        batch = compute_advantage(
+                            batch,
+                            adv_estimator=self.config.algorithm.adv_estimator,
+                            gamma=self.config.algorithm.gamma,
+                            lam=self.config.algorithm.lam,
+                            num_repeat=self.config.actor_rollout_ref.rollout.n,
+                            norm_adv_by_std_in_grpo=norm_adv_by_std_in_grpo,
+                            multi_turn=self.config.actor_rollout_ref.rollout.multi_turn.enable,
+                        )
+
 
                     # update critic
                     if self.use_critic:
@@ -1096,6 +1136,7 @@ class RayPPOTrainer:
                         with _timer('update_actor', timing_raw):
                             if self.config.do_search and self.config.actor_rollout_ref.actor.state_masking:
                                 batch, metrics = self._create_loss_mask(batch, metrics)
+                            batch.meta_info["multi_turn"] = self.config.actor_rollout_ref.rollout.multi_turn.enable
                             actor_output = self.actor_rollout_wg.update_actor(batch)
                         actor_output_metrics = reduce_metrics(actor_output.meta_info['metrics'])
                         metrics.update(actor_output_metrics)
