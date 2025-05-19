@@ -588,13 +588,13 @@ If I want to give the final answer, I should put the answer between <answer> and
         def process_tool_call(idx, tool_call):
             try:
                 call_start = time.time()
-                print(f"INFO: Executing tool call {idx} at {call_start}")
+                # print(f"INFO: Executing tool call {idx} at {call_start}")
                 # 执行工具调用
                 result = self.execute_tool_call(tool_call)
                 # 格式化结果
                 formatted_result = self._format_tool_result(tool_call, result)
                 call_end = time.time()
-                print(f"INFO: Tool call {idx} completed in {call_end - call_start:.2f}s")
+                # print(f"INFO: Tool call {idx} completed in {call_end - call_start:.2f}s")
                 return idx, formatted_result
             except Exception as e:
                 # 处理错误情况
