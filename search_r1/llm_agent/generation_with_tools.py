@@ -4,6 +4,7 @@ import torch
 import re
 import os
 import ast
+import time
 from typing import List, Dict, Any, Tuple
 from dataclasses import dataclass
 
@@ -213,16 +214,28 @@ class LLMGenerationManager:
             if active_batch size is not divisible by num_gpus, pad with first sequence
             then remove padding from output
         """
+        padding_start = time.time()
         num_gpus = self.config.num_gpus
         if num_gpus <= 1:
-            return self.actor_rollout_wg.generate_sequences(active_batch)
+            print(f"INFO: Generating sequences without padding (single GPU) at {padding_start}")
+            generate_start = time.time()
+            result = self.actor_rollout_wg.generate_sequences(active_batch)
+            generate_end = time.time()
+            print(f"INFO: Single GPU sequence generation completed in {generate_end - generate_start:.2f}s")
+            return result
             
         batch_size = active_batch.batch['input_ids'].shape[0]
         remainder = batch_size % num_gpus
 
         if remainder == 0:
-            return self.actor_rollout_wg.generate_sequences(active_batch)
+            print(f"INFO: Generating sequences without padding (batch size divisible by GPUs) at {padding_start}")
+            generate_start = time.time()
+            result = self.actor_rollout_wg.generate_sequences(active_batch)
+            generate_end = time.time()
+            print(f"INFO: Multi-GPU sequence generation (no padding) completed in {generate_end - generate_start:.2f}s")
+            return result
         
+        print(f"INFO: Preparing padding for GPU batch (remainder={remainder}) at {padding_start}")
         # Add padding sequences
         padding_size = num_gpus - remainder
         padded_batch = {}
@@ -233,11 +246,19 @@ class LLMGenerationManager:
             padded_batch[k] = torch.cat([v, pad_sequence], dim=0)
 
         padded_active_batch = DataProto.from_dict(padded_batch)
+        padding_end = time.time()
+        print(f"INFO: Padding preparation completed in {padding_end - padding_start:.2f}s")
 
         # Generate with padded batch
+        generate_start = time.time()
+        print(f"INFO: Generating sequences with padded batch at {generate_start}")
         padded_output = self.actor_rollout_wg.generate_sequences(padded_active_batch)
+        generate_end = time.time()
+        print(f"INFO: Multi-GPU sequence generation (with padding) completed in {generate_end - generate_start:.2f}s")
         
         # Remove padding from output
+        unpad_start = time.time()
+        print(f"INFO: Starting padding removal at {unpad_start}")
         trimmed_batch = {k: v[:-padding_size] for k, v in padded_output.batch.items()}
         
         # Handle meta_info if present
@@ -251,10 +272,16 @@ class LLMGenerationManager:
             padded_output.meta_info = trimmed_meta
             
         padded_output.batch = trimmed_batch
+        unpad_end = time.time()
+        print(f"INFO: Padding removal completed in {unpad_end - unpad_start:.2f}s")
+        
         return padded_output
 
     def run_llm_loop(self, gen_batch: DataProto, initial_input_ids: torch.Tensor) -> Tuple[Dict, Dict]:
         """Run main LLM generation loop."""
+        
+        print(f"INFO: Starting run_llm_loop at {time.time()}")
+        loop_start_time = time.time()
         
         original_left_side = {'input_ids': initial_input_ids[:, -self.config.max_start_length:]}
         original_right_side = {'responses': initial_input_ids[:, []], 'responses_with_info_mask': initial_input_ids[:, []]}
@@ -270,6 +297,9 @@ class LLMGenerationManager:
 
         # Main generation loop
         for step in range(self.config.max_turns):
+            step_start_time = time.time()
+            print(f"INFO: Starting step {step} at {step_start_time}")
+            
             if not active_mask.sum():
                 break
             print(f'--- Main generation loop: step {step} ---')
@@ -285,7 +315,11 @@ class LLMGenerationManager:
             
             #print(f'rollings_active.size: {len(rollings_active)}')
             
+            gen_start_time = time.time()
+            print(f"INFO: Starting model generation at {gen_start_time}")
             gen_output = self._generate_with_gpu_padding(rollings_active)
+            gen_end_time = time.time()
+            print(f"INFO: Model generation completed in {gen_end_time - gen_start_time:.2f}s")
             
             #print(f'gen_output.size: {len(gen_output)}')
             
@@ -294,9 +328,13 @@ class LLMGenerationManager:
             responses_ids, responses_str = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
             # Execute in environment and process observations
+            execute_start_time = time.time()
+            print(f"INFO: Starting execute_predictions at {execute_start_time}")
             next_obs, dones, valid_action, is_search = self.execute_predictions(
                 responses_str, self.tokenizer.pad_token, active_mask
             )
+            execute_end_time = time.time()
+            print(f"INFO: execute_predictions completed in {execute_end_time - execute_start_time:.2f}s")
             
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
@@ -319,8 +357,14 @@ class LLMGenerationManager:
                 next_obs_ids
             )
             
+            step_end_time = time.time()
+            print(f"INFO: Step {step} completed in {step_end_time - step_start_time:.2f}s")
+            
         # final LLM rollout
         if active_mask.sum():
+            final_rollout_start = time.time()
+            print(f"INFO: Starting final LLM rollout at {final_rollout_start}")
+            
             rollings.batch = self.tensor_fn.cut_to_effective_len(
                 rollings.batch,
                 keys=['input_ids', 'attention_mask', 'position_ids']
@@ -330,16 +374,25 @@ class LLMGenerationManager:
             rollings_active = DataProto.from_dict({
                 k: v[active_mask] for k, v in rollings.batch.items()
             })            
+            
+            final_gen_start = time.time()
+            print(f"INFO: Starting final model generation at {final_gen_start}")
             gen_output = self._generate_with_gpu_padding(rollings_active)
+            final_gen_end = time.time()
+            print(f"INFO: Final model generation completed in {final_gen_end - final_gen_start:.2f}s")
 
             meta_info = gen_output.meta_info            
             responses_ids, responses_str = self._postprocess_responses(gen_output.batch['responses'])
             responses_ids, responses_str = self.tensor_fn._example_level_pad(responses_ids, responses_str, active_mask)
 
             # # Execute in environment and process observations
+            final_execute_start = time.time()
+            print(f"INFO: Starting final execute_predictions at {final_execute_start}")
             _, dones, valid_action, is_search = self.execute_predictions(
                 responses_str, self.tokenizer.pad_token, active_mask, do_search=False
             )
+            final_execute_end = time.time()
+            print(f"INFO: Final execute_predictions completed in {final_execute_end - final_execute_start:.2f}s")
 
             curr_active_mask = torch.tensor([not done for done in dones], dtype=torch.bool)
             active_mask = active_mask * curr_active_mask
@@ -356,10 +409,22 @@ class LLMGenerationManager:
                 original_right_side,
                 responses_ids,
             )
+            
+            final_rollout_end = time.time()
+            print(f"INFO: Final LLM rollout completed in {final_rollout_end - final_rollout_start:.2f}s")
         
         print("ACTIVE_TRAJ_NUM:", active_num_list)
         
-        return self._compose_final_output(original_left_side, original_right_side, meta_info)
+        compose_start = time.time()
+        print(f"INFO: Starting final output composition at {compose_start}")
+        final_output = self._compose_final_output(original_left_side, original_right_side, meta_info)
+        compose_end = time.time()
+        print(f"INFO: Final output composition completed in {compose_end - compose_start:.2f}s")
+        
+        loop_end_time = time.time()
+        print(f"INFO: Total run_llm_loop completed in {loop_end_time - loop_start_time:.2f}s")
+        
+        return final_output
 
     def _compose_final_output(self, left_side: Dict,
                             right_side: Dict,
@@ -407,16 +472,27 @@ class LLMGenerationManager:
         Returns:
             List of observation strings
         """
+        process_start = time.time()
+        print(f"INFO: Starting postprocess_predictions at {process_start}")
         cur_actions, tool_calls = self.postprocess_predictions(predictions)
+        process_end = time.time()
+        print(f"INFO: postprocess_predictions completed in {process_end - process_start:.2f}s")
+        
         next_obs, dones, valid_action, is_search = [], [], [], []
         
         search_queries = [tool_call for action, tool_call in zip(cur_actions, tool_calls) if action == 'search']
         if do_search:
+            search_start = time.time()
+            search_count = len(search_queries)
+            print(f"INFO: Starting batch_execute_tool_calls for {search_count} search queries at {search_start}")
             search_results = self.batch_execute_tool_calls(search_queries)
+            search_end = time.time()
+            print(f"INFO: batch_execute_tool_calls completed in {search_end - search_start:.2f}s, avg {(search_end-search_start)/max(1,search_count):.2f}s per query")
             assert len(search_results) == sum([1 for action in cur_actions if action == 'search'])
         else:
             search_results = [''] * sum([1 for action in cur_actions if action == 'search'])
 
+        process_results_start = time.time()
         for i, (action, active) in enumerate(zip(cur_actions, active_mask)):
             
             if not active:
@@ -443,6 +519,9 @@ If I want to give the final answer, I should put the answer between <answer> and
                     dones.append(0)
                     valid_action.append(0)
                     is_search.append(0)
+        
+        process_results_end = time.time()
+        print(f"INFO: Processing results completed in {process_results_end - process_results_start:.2f}s")
             
         assert len(search_results) == 0
             
@@ -502,15 +581,20 @@ If I want to give the final answer, I should put the answer between <answer> and
             return []
 
         # 创建一个线程池，最大工作线程数可以根据需要调整
-        max_workers = min(len(tool_calls), 30)  # 限制最大线程数为10或调用数量
+        max_workers = min(len(tool_calls), 32)  # 限制最大线程数为10或调用数量
+        print(f"INFO: Setting up ThreadPoolExecutor with {max_workers} workers for {len(tool_calls)} tool calls")
 
         # 定义工作函数，包含错误处理
         def process_tool_call(idx, tool_call):
             try:
+                call_start = time.time()
+                print(f"INFO: Executing tool call {idx} at {call_start}")
                 # 执行工具调用
                 result = self.execute_tool_call(tool_call)
                 # 格式化结果
                 formatted_result = self._format_tool_result(tool_call, result)
+                call_end = time.time()
+                print(f"INFO: Tool call {idx} completed in {call_end - call_start:.2f}s")
                 return idx, formatted_result
             except Exception as e:
                 # 处理错误情况
@@ -521,6 +605,7 @@ If I want to give the final answer, I should put the answer between <answer> and
         results = [None] * len(tool_calls)
 
         # 使用线程池并行执行工具调用
+        pool_start = time.time()
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             # 提交所有任务到线程池
             future_to_idx = {
@@ -533,9 +618,8 @@ If I want to give the final answer, I should put the answer between <answer> and
                 idx, result = future.result()
                 results[idx] = result
 
-            # 打印完成执行的日志
-            # elapsed_time = time.time() - start_time
-            # print(f"Completed parallel execution of {len(tool_calls)} tool calls in {elapsed_time:.2f} seconds")
+        pool_end = time.time()
+        print(f"INFO: ThreadPoolExecutor completed all tool calls in {pool_end - pool_start:.2f}s")
 
         # 确保所有结果都已填充
         assert None not in results, "Some tool calls did not complete"

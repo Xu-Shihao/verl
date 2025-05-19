@@ -21,6 +21,7 @@ This trainer supports model-agonistic model initialization with huggingface
 import json
 import os
 import uuid
+import time
 from collections import defaultdict
 from contextlib import contextmanager
 from copy import deepcopy
@@ -667,34 +668,66 @@ class RayPPOTrainer:
                     'validate': True,
                 }
                 with _timer('step', timing_raw):
+                    validate_step_start = time.time()
+                    print(f"INFO: Starting validation step at {validate_step_start}")
+                    
                     first_input_ids = test_gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone()
                     with _timer('gen', timing_raw):
                         generation_manager.timing_raw = timing_raw
+                        
+                        val_llm_loop_start = time.time()
+                        print(f"INFO: Starting validation run_llm_loop at {val_llm_loop_start}")
+                        
                         final_gen_batch_output = generation_manager.run_llm_loop(
                             gen_batch=test_gen_batch,
                             initial_input_ids=first_input_ids,
                         )
+                        
+                        val_llm_loop_end = time.time()
+                        print(f"INFO: Validation run_llm_loop completed in {val_llm_loop_end - val_llm_loop_start:.2f}s")
                     
+                    val_union_start = time.time()
+                    print(f"INFO: Unioning test_batch with final_gen_batch_output at {val_union_start}")
                     test_batch = test_batch.union(final_gen_batch_output)
+                    val_union_end = time.time()
+                    print(f"INFO: Validation batch union completed in {val_union_end - val_union_start:.2f}s")
                     
+                    val_conversion_start = time.time()
+                    print(f"INFO: Converting validation tensors to long at {val_conversion_start}")
                     for key in test_batch.batch.keys():
                         #print(f'key={key}')
                         test_batch.batch[key] = test_batch.batch[key].long()
+                    val_conversion_end = time.time()
+                    print(f"INFO: Validation tensor conversion completed in {val_conversion_end - val_conversion_start:.2f}s")
                     
                     # evaluate using reward_function
+                    val_reward_start = time.time()
+                    print(f"INFO: Starting validation reward calculation at {val_reward_start}")
                     result = self.val_reward_fn(test_batch, return_dict=True)
                     reward_tensor = result["reward_tensor"]
                     scores = reward_tensor.sum(-1).cpu().tolist()
                     sample_scores.extend(scores)
+                    val_reward_end = time.time()
+                    print(f"INFO: Validation reward calculation completed in {val_reward_end - val_reward_start:.2f}s")
 
                     # pad to be divisible by dp_size
+                    val_pad_start = time.time()
+                    print(f"INFO: Starting validation padding and generation at {val_pad_start}")
                     test_gen_batch_padded, pad_size = pad_dataproto_to_divisor(test_gen_batch, self.actor_rollout_wg.world_size)
                     test_output_gen_batch_padded = self.actor_rollout_wg.generate_sequences(test_gen_batch_padded)
+                    val_pad_end = time.time()
+                    print(f"INFO: Validation padding and generation completed in {val_pad_end - val_pad_start:.2f}s")
 
                     # unpad
+                    val_unpad_start = time.time()
+                    print(f"INFO: Starting validation unpadding at {val_unpad_start}")
                     test_output_gen_batch = unpad_dataproto(test_output_gen_batch_padded, pad_size=pad_size)
+                    val_unpad_end = time.time()
+                    print(f"INFO: Validation unpadding completed in {val_unpad_end - val_unpad_start:.2f}s")
                     
                     # Store original inputs
+                    val_process_start = time.time()
+                    print(f"INFO: Processing validation inputs/outputs at {val_process_start}")
                     input_ids = test_batch.batch['input_ids']
                     input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
                     sample_inputs.extend(input_texts)
@@ -707,8 +740,13 @@ class RayPPOTrainer:
                     if "reward_extra_info" in result:
                         for key, lst in result["reward_extra_info"].items():
                             reward_extra_infos_dict[key].extend(lst)
+                    val_process_end = time.time()
+                    print(f"INFO: Validation input/output processing completed in {val_process_end - val_process_start:.2f}s")
                             
                     data_source_lst.append(test_batch.non_tensor_batch.get("data_source", ["unknown"] * reward_tensor.shape[0]))
+                    
+                    validate_step_end = time.time()
+                    print(f"INFO: Validation step completed in {validate_step_end - validate_step_start:.2f}s")
 
         self._maybe_log_val_generations(inputs=sample_inputs, outputs=sample_outputs, scores=sample_scores)
 
@@ -985,6 +1023,8 @@ class RayPPOTrainer:
         for epoch in range(self.config.trainer.total_epochs):
             for batch_dict in self.train_dataloader:
                 print(f'epoch {epoch}, step {self.global_steps}')
+                epoch_start = time.time()
+                
                 metrics = {}
                 timing_raw = {}
 
@@ -1037,30 +1077,50 @@ class RayPPOTrainer:
                         ####################
                         # Below is aLL about agents - the "LLM + forloop"
                         ####################
+                        agent_start = time.time()
+                        print(f"INFO: Starting agent loop at {agent_start}")
+                        
                         first_input_ids = gen_batch.batch['input_ids'][:, -gen_config.max_start_length:].clone().long()
                         #print("llm loop")
                         with _timer('gen', timing_raw):
                             generation_manager.timing_raw = timing_raw
+                            
+                            llm_loop_start = time.time()
+                            print(f"INFO: Starting run_llm_loop at {llm_loop_start}")
+                            
                             final_gen_batch_output = generation_manager.run_llm_loop(
                                 gen_batch=gen_batch,
                                 initial_input_ids=first_input_ids,
                             )
+                            
+                            llm_loop_end = time.time()
+                            print(f"INFO: run_llm_loop completed in {llm_loop_end - llm_loop_start:.2f}s")
 
                         # final_gen_batch_output.batch.apply(lambda x: x.long(), inplace=True)
+                        process_output_start = time.time()
+                        print(f"INFO: Converting output tensors to long at {process_output_start}")
                         for key in final_gen_batch_output.batch.keys():
                             final_gen_batch_output.batch[key] = final_gen_batch_output.batch[key].long()
-
-                        # with torch.no_grad():
-                        #     output = self.actor_rollout_wg.compute_log_prob(final_gen_batch_output)
-                        #     final_gen_batch_output = final_gen_batch_output.union(output)
+                        process_output_end = time.time()
+                        print(f"INFO: Tensor conversion completed in {process_output_end - process_output_start:.2f}s")
 
                         # batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
                         #                                         dtype=object)
+                        uid_gen_start = time.time()
                         batch.non_tensor_batch['uid'] = batch.non_tensor_batch['index'].copy()
                         
                         # repeat to align with repeated responses in rollout
+                        print(f"INFO: xfxaaa={self.config.actor_rollout_ref.rollout.n} at {uid_gen_start}")
                         batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
+                        
+                        union_start = time.time()
+                        print(f"INFO: Unioning batch with final_gen_batch_output at {union_start}")
                         batch = batch.union(final_gen_batch_output)
+                        union_end = time.time()
+                        print(f"INFO: Batch union completed in {union_end - union_start:.2f}s")
+                        
+                        agent_end = time.time()
+                        print(f"INFO: Agent loop completed in {agent_end - agent_start:.2f}s")
 
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.
@@ -1171,7 +1231,10 @@ class RayPPOTrainer:
                     return
 
                 self.global_steps += 1
-
+                print(f"INFO: step {self.global_steps} time: {time.time() - epoch_start:.2f}s")
+                
+            print(f"INFO: epoch {epoch} completed in {time.time() - epoch_start:.2f}s")
+            
     def _create_loss_mask(self, batch, metrics):
         """Create loss mask for state tokens."""
         response_length = batch.batch['responses'].shape[-1]
