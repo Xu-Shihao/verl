@@ -217,9 +217,9 @@ def lightrag_format_check(solution_str):
     
     Scoring rule:
     - 0.1: If starts with <think> tag and ends with </answer> tag
-    - 0.1: If tags appear in continuous order, not following the required order of think->search->information->think->...->answer
     - 0.2: If adjacent different tags have content between them (no empty transitions)
     - 0.4: If only contains allowed tags (<think>, <search>, <information>, <answer>) and all tags appear in pairs
+    - 0.5: If tags appear in continuous order, not following the required order of think->search->information->think->...->answer
     - 0.6: If same tags have content (e.g., <think>content...</think>)
     - 1.0: If uses at least two different tools (minimum two <search> calls with different tools)
     
@@ -246,33 +246,6 @@ def lightrag_format_check(solution_str):
     # Check if tags follow the required order: think->search->information->think->...->answer
     # Extract all opening and closing tags
     all_tags = re.findall(r'</?(?:think|search|information|answer)>', solution_str)
-    
-    # Check for the correct tag sequence
-    tag_sequence_correct = True
-    i = 0
-    
-    # Check each tag in the expected sequence until we reach the final </answer>
-    while i < len(all_tags) - 1 and all_tags[i] != '</answer>':
-        current_tag = all_tags[i]
-        next_tag = all_tags[i+1]
-        
-        # If we're at a </think> tag, next should be either <search> or <answer>
-        if current_tag == '</think>':
-            if next_tag not in ['<search>', '<answer>']:
-                tag_sequence_correct = False
-                break
-        # If we're at a </search> tag, next should be <information>
-        elif current_tag == '</search>' and next_tag != '<information>':
-            tag_sequence_correct = False
-            break
-        # If we're at a </information> tag, next should be <think>
-        elif current_tag == '</information>' and next_tag != '<think>':
-            tag_sequence_correct = False
-            break
-        i += 1
-    
-    if not tag_sequence_correct:
-        return score  # Tag sequence incorrect, return 0.1
     
     # Look for empty transitions between different tags
     # Common patterns: </think><search>, </search><information>, </information><think>, </think><answer>
@@ -341,10 +314,37 @@ def lightrag_format_check(solution_str):
         if not all_tags_have_content:
             break
     
-    if all_tags_have_content:
-        score = 0.6
-    else:
+    if not all_tags_have_content:
         return score  # Not all tags have content, return 0.4
+
+    # Check for the correct tag sequence
+    tag_sequence_correct = True
+    i = 0
+    
+    # Check each tag in the expected sequence until we reach the final </answer>
+    while i < len(all_tags) - 1 and all_tags[i] != '</answer>':
+        current_tag = all_tags[i]
+        next_tag = all_tags[i+1]
+        
+        # If we're at a </think> tag, next should be either <search> or <answer>
+        if current_tag == '</think>':
+            if next_tag not in ['<search>', '<answer>']:
+                tag_sequence_correct = False
+                break
+        # If we're at a </search> tag, next should be <information>
+        elif current_tag == '</search>' and next_tag != '<information>':
+            tag_sequence_correct = False
+            break
+        # If we're at a </information> tag, next should be <think>
+        elif current_tag == '</information>' and next_tag != '<think>':
+            tag_sequence_correct = False
+            break
+        i += 1
+    
+    if not tag_sequence_correct:
+        return 0.5  # Tag sequence incorrect, return 0.5
+    
+    score = 0.6
     
     # Check for at least two different tool calls in <search> tags
     search_pattern = r'<search>(.*?)</search>'

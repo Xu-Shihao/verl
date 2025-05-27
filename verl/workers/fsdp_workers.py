@@ -541,6 +541,7 @@ class ActorRolloutRefWorker(Worker):
                 lr_scheduler=self.actor_lr_scheduler,
                 processing_class=self.processor if self.processor is not None else self.tokenizer,
                 checkpoint_contents=self.config.actor.checkpoint.contents,
+                override_lr_from_config=True,
             )
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)

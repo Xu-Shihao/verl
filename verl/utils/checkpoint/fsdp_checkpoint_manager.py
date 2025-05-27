@@ -50,6 +50,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         lr_scheduler: torch.optim.lr_scheduler.LRScheduler,
         processing_class: Union[PreTrainedTokenizer, ProcessorMixin] = None,
         checkpoint_contents: Optional[list] = None,
+        override_lr_from_config: bool = False,
         **kwargs,
     ):
         if checkpoint_contents is None:
@@ -67,6 +68,7 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             processing_class=processing_class,
             checkpoint_contents=checkpoint_contents,
         )
+        self.override_lr_from_config = override_lr_from_config
 
     def load_checkpoint(self, local_path: str, hdfs_path: str = None, del_local_after_load=False):
         if local_path is None:
@@ -106,8 +108,11 @@ class FSDPCheckpointManager(BaseCheckpointManager):
             # 'rng' may not exist for backward compatibility
             self.load_rng_state(extra_state_dict["rng"])
 
-        if self.lr_scheduler is not None:
+        # 只有当不需要从config重新设置学习率时才恢复lr_scheduler状态
+        if self.lr_scheduler is not None and not self.override_lr_from_config:
             self.lr_scheduler.load_state_dict(lr_scheduler_state_dict)
+        elif self.override_lr_from_config:
+            print(f"[rank-{self.rank}]: Skipping lr_scheduler state loading, will use config lr instead")
 
     def save_checkpoint(self, local_path: str, hdfs_path: str = None, global_step: int = 0, max_ckpt_to_keep=None):
         if local_path is None:
