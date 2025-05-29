@@ -419,16 +419,18 @@ def compute_score_em_rag(solution_str, ground_truth, question_raw='', path='', s
     # Default score if no answer is found
     format_score = lightrag_format_check(solution_str)
     
-    rw_score = 0
+    res_score = 0
     if answer is not None:
         # Check for exact match - direct comparison without order insensitivity
         normalized_answer = normalize_answer(answer)
         for target in ground_truth['target']:
             if normalized_answer == normalize_answer(target):
-                rw_score = 1
+                res_score = 1
                 break
         # Apply format check to the score
-        rw_score = format_score * (0.1 + rw_score * 0.9)
+        rw_score = format_score * (0.1 + res_score * 0.9)
+    else:
+        rw_score = format_score * (0.1 + res_score * 0.9)
     
     # Occasionally print examples for debugging (1/64 chance)
     do_print = random.randint(1, 64) == 1
@@ -444,7 +446,7 @@ def compute_score_em_rag(solution_str, ground_truth, question_raw='', path='', s
         print(f"Path: {path}")
         print(f"Solution string: {solution_str}")
     
-    return {"score": rw_score, "format_score": format_score}
+    return {"score": rw_score, "format_score": format_score, "res_score": res_score}
 
 
 def lightrag_format_check2(solution_str):
