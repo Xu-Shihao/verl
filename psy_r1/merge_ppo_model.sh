@@ -1,0 +1,1 @@
+python ./scripts/legacy_model_merger.py merge --backend fsdp --hf_model_path '/tcci_mnt/shihao/models/Qwen3-8B' --local_dir '/tcci_mnt/shihao/project/verl/checkpoints/SMHC_diagnosis_with_reasoning_RL/qwen3_8B_8_gpu/global_step_1040/actor' --target_dir '/tcci_mnt/shihao/outputs/qwen3-8B_auxiliary_diagnosis_grpo_v4'

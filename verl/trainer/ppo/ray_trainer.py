@@ -834,11 +834,17 @@ class RayPPOTrainer:
         # create actor and rollout
         if self.hybrid_engine:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
+            # Get NPU profile options with default fallback
+            npu_profile_options = getattr(
+                getattr(self.config.trainer, 'npu_profile', None), 
+                'options', 
+                {}
+            )
             actor_rollout_cls = RayClassWithInitArgs(
                 cls=self.role_worker_mapping[Role.ActorRollout],
                 config=self.config.actor_rollout_ref,
                 role="actor_rollout",
-                profile_option=self.config.trainer.npu_profile.options,
+                profile_option=npu_profile_options,
             )
             self.resource_pool_to_cls[resource_pool]["actor_rollout"] = actor_rollout_cls
         else:
@@ -853,11 +859,17 @@ class RayPPOTrainer:
         # create reference policy if needed
         if self.use_reference_policy:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
+            # Get NPU profile options with default fallback
+            npu_profile_options = getattr(
+                getattr(self.config.trainer, 'npu_profile', None), 
+                'options', 
+                {}
+            )
             ref_policy_cls = RayClassWithInitArgs(
                 self.role_worker_mapping[Role.RefPolicy],
                 config=self.config.actor_rollout_ref,
                 role="ref",
-                profile_option=self.config.trainer.npu_profile.options,
+                profile_option=npu_profile_options,
             )
             self.resource_pool_to_cls[resource_pool]["ref"] = ref_policy_cls
 

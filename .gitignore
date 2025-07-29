@@ -124,3 +124,6 @@ logs
 log
 outputs
 .history
+
+# psy_r1
+psy_r1/*_data*/

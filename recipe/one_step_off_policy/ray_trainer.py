@@ -209,11 +209,17 @@ class OneStepOffRayTrainer(RayPPOTrainer):
         # create reference policy if needed
         if self.use_reference_policy:
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
+            # Get NPU profile options with default fallback
+            npu_profile_options = getattr(
+                getattr(self.config.trainer, 'npu_profile', None), 
+                'options', 
+                {}
+            )
             ref_policy_cls = RayClassWithInitArgs(
                 self.role_worker_mapping[Role.RefPolicy],
                 config=self.config.actor_rollout_ref,
                 role="ref",
-                profile_option=self.config.trainer.npu_profile.options,
+                profile_option=npu_profile_options,
             )
             self.resource_pool_to_cls[resource_pool]["ref"] = ref_policy_cls
 
