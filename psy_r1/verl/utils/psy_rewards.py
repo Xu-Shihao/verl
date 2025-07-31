@@ -27,13 +27,30 @@ def extract_diagnosis_from_box(text: str) -> str:
     Returns:
         提取的诊断结果，如果没有找到则返回空字符串
     """
-    # 使用正则表达式匹配 <box></box> 标签
-    pattern = r'<box>(.*?)</box>'
-    matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
+    # 查找所有 <box> 的起始位置
+    box_starts = []
+    box_ends = []
     
-    if matches:
-        # 返回最后一个匹配的内容，去除前后空白
-        return matches[-1].strip()
+    # 查找所有 <box> 标签位置（不区分大小写）
+    for match in re.finditer(r'<box>', text, re.IGNORECASE):
+        box_starts.append(match.end())
+    
+    # 查找所有 </box> 标签位置（不区分大小写）
+    for match in re.finditer(r'</box>', text, re.IGNORECASE):
+        box_ends.append(match.start())
+    
+    # 如果没有配对的标签，返回空字符串
+    if not box_starts or not box_ends:
+        return ""
+    
+    # 从后往前匹配，找到最后一个有效的 <box></box> 对
+    for end_pos in reversed(box_ends):
+        # 找到在这个 </box> 之前的最近的 <box>
+        for start_pos in reversed(box_starts):
+            if start_pos < end_pos:
+                # 提取内容并返回
+                content = text[start_pos:end_pos].strip()
+                return content
     
     return ""
 
@@ -94,17 +111,17 @@ def check_diagnosis_correctness(predicted_diagnosis: str, ground_truth: Union[st
         if pred_norm == gt_norm:
             return True
         
-        # 包含关系匹配（预测结果包含正确答案的关键词）
-        if gt_norm and gt_norm in pred_norm:
-            return True
+        # # 包含关系匹配（预测结果包含正确答案的关键词）
+        # if gt_norm and gt_norm in pred_norm:
+        #     return True
         
-        # 关键词匹配（正确答案的关键词在预测结果中）
-        gt_keywords = gt_norm.split()
-        if len(gt_keywords) > 0:
-            # 至少匹配一半的关键词
-            matched_keywords = sum(1 for keyword in gt_keywords if keyword in pred_norm)
-            if matched_keywords >= len(gt_keywords) * 0.5:
-                return True
+        # # 关键词匹配（正确答案的关键词在预测结果中）
+        # gt_keywords = gt_norm.split()
+        # if len(gt_keywords) > 0:
+        #     # 至少匹配一半的关键词
+        #     matched_keywords = sum(1 for keyword in gt_keywords if keyword in pred_norm)
+        #     if matched_keywords >= len(gt_keywords) * 0.5:
+        #         return True
     
     return False
 
