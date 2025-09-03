@@ -762,6 +762,9 @@ reward_model:
   # Whether to use PSY reward function for diagnosis
   use_psy_reward: True
 
+  # Whether to enable symptom identification reward (default: False for backward compatibility)
+  use_symptom_reward: False
+
   # Whether to show training examples
   show_training_examples: True
 

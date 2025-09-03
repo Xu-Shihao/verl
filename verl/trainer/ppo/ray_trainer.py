@@ -211,6 +211,56 @@ def compute_response_mask(data: DataProto):
     return attention_mask[:, -response_length:]
 
 
+def extract_psy_metrics(reward_extra_infos_dict: dict, prefix: str = "training") -> dict:
+    """Extract and aggregate PSY-specific metrics from reward_extra_infos_dict.
+    
+    Args:
+        reward_extra_infos_dict: Dictionary containing reward extra information
+        prefix: Prefix for metric names (e.g., "training", "val-core", "val-aux")
+        
+    Returns:
+        Dictionary of aggregated PSY metrics
+    """
+    psy_metrics = {}
+    
+    if not reward_extra_infos_dict:
+        return psy_metrics
+    
+    # Find all PSY-related keys
+    psy_keys = [key for key in reward_extra_infos_dict.keys() if key.startswith("psy_")]
+    
+    for psy_key in psy_keys:
+        values = reward_extra_infos_dict[psy_key]
+        if values and len(values) > 0:
+            # Convert to numpy array for easier computation
+            values_array = np.array(values)
+            
+            # Remove the "psy_" prefix and create metric name
+            metric_name = psy_key[4:]  # Remove "psy_" prefix
+            
+            # Calculate statistics
+            if values_array.dtype in [np.float32, np.float64]:
+                # For numerical values, calculate mean, std, min, max
+                psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array))
+                psy_metrics[f"{prefix}/psy_{metric_name}_std"] = float(np.std(values_array))
+                psy_metrics[f"{prefix}/psy_{metric_name}_min"] = float(np.min(values_array))
+                psy_metrics[f"{prefix}/psy_{metric_name}_max"] = float(np.max(values_array))
+            elif values_array.dtype in [np.int32, np.int64]:
+                # For integer values, calculate mean, min, max
+                psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array))
+                psy_metrics[f"{prefix}/psy_{metric_name}_min"] = int(np.min(values_array))
+                psy_metrics[f"{prefix}/psy_{metric_name}_max"] = int(np.max(values_array))
+            else:
+                # For other types, just calculate mean if possible
+                try:
+                    psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array.astype(float)))
+                except (ValueError, TypeError):
+                    # If conversion fails, just count the number of samples
+                    psy_metrics[f"{prefix}/psy_{metric_name}_count"] = len(values_array)
+    
+    return psy_metrics
+
+
 def compute_advantage(
     data: DataProto,
     adv_estimator: AdvantageEstimator,
@@ -763,12 +813,20 @@ class RayPPOTrainer:
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_scores.extend(scores)
 
-            reward_extra_infos_dict["reward"].extend(scores)
-            print(f"len reward_extra_infos_dict['reward']: {len(reward_extra_infos_dict['reward'])}")
-            if "reward_extra_info" in result:
+            # Check if reward_extra_info already contains reward scores (from PSY reward function)
+            if "reward_extra_info" in result and "reward" in result["reward_extra_info"]:
+                # PSY reward function already provides reward scores in reward_extra_info
                 for key, lst in result["reward_extra_info"].items():
                     reward_extra_infos_dict[key].extend(lst)
                     print(f"len reward_extra_infos_dict['{key}']: {len(reward_extra_infos_dict[key])}")
+            else:
+                # Traditional reward function - add scores manually
+                reward_extra_infos_dict["reward"].extend(scores)
+                print(f"len reward_extra_infos_dict['reward']: {len(reward_extra_infos_dict['reward'])}")
+                if "reward_extra_info" in result:
+                    for key, lst in result["reward_extra_info"].items():
+                        reward_extra_infos_dict[key].extend(lst)
+                        print(f"len reward_extra_infos_dict['{key}']: {len(reward_extra_infos_dict[key])}")
 
             # collect num_turns of each prompt
             if "__num_turns__" in test_batch.non_tensor_batch:
@@ -792,10 +850,19 @@ class RayPPOTrainer:
         for key_info, lst in reward_extra_infos_dict.items():
             assert len(lst) == 0 or len(lst) == len(sample_scores), f"{key_info}: {len(lst)=}, {len(sample_scores)=}"
 
+        # Extract and add PSY-specific metrics to validation metrics
+        psy_val_metrics = extract_psy_metrics(reward_extra_infos_dict, prefix="val-aux")
+        
         data_sources = np.concatenate(data_source_lst, axis=0)
 
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
+        
+        # Add PSY metrics to the metric dictionary
+        if psy_val_metrics:
+            metric_dict.update(psy_val_metrics)
+            print(f"[INFO] Added {len(psy_val_metrics)} PSY validation metrics: {list(psy_val_metrics.keys())}")
+        
         for data_source, var2metric2val in data_src2var2metric2val.items():
             core_var = "acc" if "acc" in var2metric2val else "reward"
             for var_name, metric2val in var2metric2val.items():
@@ -1231,6 +1298,20 @@ class RayPPOTrainer:
                             future_reward = compute_reward_async.remote(data=batch, reward_fn=self.reward_fn)
                         else:
                             reward_tensor, reward_extra_infos_dict = compute_reward(batch, self.reward_fn)
+                            
+                            # Extract and add PSY-specific metrics for non-async reward computation
+                            if reward_extra_infos_dict:
+                                # Handle non_tensor_batch updates here as well to avoid duplication later
+                                expected_batch_size = batch.batch.batch_size[0]
+                                for k, v in reward_extra_infos_dict.items():
+                                    # Skip PSY metrics from batch.non_tensor_batch since they're only for metrics logging
+                                    if not k.startswith("psy_") and len(v) == expected_batch_size:
+                                        batch.non_tensor_batch[k] = np.array(v)
+                                
+                                psy_metrics = extract_psy_metrics(reward_extra_infos_dict, prefix="training")
+                                if psy_metrics:
+                                    metrics.update(psy_metrics)
+                                    print(f"[INFO] Added {len(psy_metrics)} PSY training metrics (non-async): {list(psy_metrics.keys())}")
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1291,7 +1372,18 @@ class RayPPOTrainer:
                         batch.batch["token_level_scores"] = reward_tensor
 
                         if reward_extra_infos_dict:
-                            batch.non_tensor_batch.update({k: np.array(v) for k, v in reward_extra_infos_dict.items()})
+                            # Only update with non-empty arrays that match batch size
+                            expected_batch_size = batch.batch.batch_size[0]
+                            for k, v in reward_extra_infos_dict.items():
+                                # Skip PSY metrics from batch.non_tensor_batch since they're only for metrics logging
+                                if not k.startswith("psy_") and len(v) == expected_batch_size:
+                                    batch.non_tensor_batch[k] = np.array(v)
+                            
+                            # Extract and add PSY-specific metrics to training metrics
+                            psy_metrics = extract_psy_metrics(reward_extra_infos_dict, prefix="training")
+                            if psy_metrics:
+                                metrics.update(psy_metrics)
+                                print(f"[INFO] Added {len(psy_metrics)} PSY training metrics: {list(psy_metrics.keys())}")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:

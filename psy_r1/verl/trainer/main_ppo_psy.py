@@ -30,23 +30,122 @@ from verl.utils.device import is_cuda_available
 from verl.utils.import_utils import load_extern_type
 import torch
 
-def create_psy_reward_fn(is_validation=None, tokenizer=None):
+
+# 简化版本：直接使用原有的 RayPPOTrainer，不做复杂的集成
+# 我们将在 reward 函数中检查是否有可用的 tracker
+
+def calculate_batch_average_metrics(batch_results):
+    """
+    计算批次中所有样本的平均指标
+    
+    Args:
+        batch_results: 批次中所有样本的结果列表
+        
+    Returns:
+        包含平均指标的字典
+    """
+    if not batch_results:
+        return {}
+    
+    # 初始化累计值
+    total_score = 0.0
+    total_diagnosis_score = 0.0
+    total_symptom_coverage = 0.0
+    total_format_score = 0.0
+    total_acc = 0.0
+    total_symptom_count = 0
+    total_extracted_symptom_count = 0
+    valid_samples = 0
+    symptom_samples = 0
+    
+    # 累计所有样本的指标
+    for result in batch_results:
+        if isinstance(result, dict) and 'error' not in result:
+            valid_samples += 1
+            
+            total_score += result.get('score', 0.0)
+            total_diagnosis_score += result.get('diagnosis_score', 0.0)
+            total_format_score += result.get('format_score', 0.0)
+            total_acc += float(result.get('acc', False))
+            
+            # 症状相关指标（只有在有症状数据时才统计）
+            if 'symptom_coverage' in result and result.get('total_symptoms', 0) > 0:
+                total_symptom_coverage += result.get('symptom_coverage', 0.0)
+                total_symptom_count += result.get('total_symptoms', 0)
+                total_extracted_symptom_count += len(result.get('extracted_symptoms', []))
+                symptom_samples += 1
+    
+    if valid_samples == 0:
+        return {}
+    
+    # 计算平均值
+    avg_metrics = {
+        'score': total_score / valid_samples,
+        'diagnosis_score': total_diagnosis_score / valid_samples,
+        'format_score': total_format_score / valid_samples,
+        'acc': total_acc / valid_samples,
+        'total_symptoms': total_symptom_count / max(symptom_samples, 1),
+        'extracted_symptoms_count': total_extracted_symptom_count / max(symptom_samples, 1),
+    }
+    
+    # 症状覆盖率（只有在有症状样本时才计算）
+    if symptom_samples > 0:
+        avg_metrics['symptom_coverage'] = total_symptom_coverage / symptom_samples
+    else:
+        avg_metrics['symptom_coverage'] = 0.0
+    
+    return avg_metrics
+
+
+def log_batch_metrics_to_tracking(batch_avg_metrics, tracker=None):
+    """
+    将批次平均指标记录到tracking系统
+    
+    Args:
+        batch_avg_metrics: 批次平均指标字典
+        tracker: Tracking实例
+    """
+    if not batch_avg_metrics or tracker is None:
+        return
+    
+    # 转换为tracking格式的指标
+    tracking_metrics = {
+        "rewards/total_score": batch_avg_metrics.get('score', 0.0),
+        "rewards/diagnosis_accuracy": batch_avg_metrics.get('diagnosis_score', 0.0),
+        "rewards/symptom_accuracy": batch_avg_metrics.get('symptom_coverage', 0.0),
+        "rewards/format_accuracy": batch_avg_metrics.get('format_score', 0.0),
+        "rewards/exact_match": batch_avg_metrics.get('acc', 0.0),
+        "symptoms/total_count": batch_avg_metrics.get('total_symptoms', 0.0),
+        "symptoms/extracted_count": batch_avg_metrics.get('extracted_symptoms_count', 0.0),
+    }
+    
+    try:
+        # 记录到tracking系统
+        tracker.log(data=tracking_metrics)
+        print(f"[INFO] Logged batch average metrics: {tracking_metrics}")
+    except Exception as e:
+        print(f"[WARNING] Failed to log batch metrics: {e}")
+
+def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, tracker=None):
     """
     Create PSY-specific reward function for psychological diagnosis
     
     Args:
         is_validation: Mode for logging control - "val" for validation, "train" for training, None for no logs
         tokenizer: The tokenizer to use for decoding tokens
+        use_symptom_reward: Whether to enable symptom identification reward
+        tracker: Tracking instance for logging metrics to verl official tracking system
     
     Returns:
         A reward function compatible with VERL reward manager interface
     """
     # Import our PSY reward functions
     try:
-        from psy_r1.verl.utils.psy_rewards import compute_diagnosis_score
+        from psy_r1.verl.utils.psy_rewards import compute_diagnosis_score, psy_reward_function
     except ImportError:
         # Fallback if the import fails
         from verl.utils.reward_score import default_compute_score as compute_diagnosis_score
+        psy_reward_function = None
     
     # Track whether we've printed the first validation example
     printed_validation_example = [False]
@@ -59,6 +158,8 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
         'correct_samples': 0,
         'format_correct_samples': 0,
         'total_score': 0.0,
+        'total_symptom_coverage': 0.0,  # 累计症状覆盖率
+        'symptom_samples': 0,  # 有症状数据的样本数
         'rollout_count': 0,
         'batch_count': 0
     }
@@ -93,10 +194,25 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
         reward_scores = []
         extra_info = {"reward": []}
         
+        # 收集验证阶段的详细指标信息
+        psy_metrics = {
+            "diagnosis_accuracy": [],
+            "symptom_accuracy": [],
+            "format_accuracy": [],
+            "exact_match": [],
+            "total_symptoms": [],
+            "extracted_symptoms_count": []
+        }
+        
         # Batch statistics for this rollout
         batch_correct = 0
         batch_format_correct = 0
         batch_total_score = 0.0
+        batch_symptom_coverage = 0.0  # 当前批次症状覆盖率累计
+        batch_symptom_samples = 0     # 当前批次有症状数据的样本数
+        
+        # 收集批次结果用于计算平均值
+        batch_results = []
         
         # Calculate valid response lengths using attention mask
         attention_mask = data.batch.get("attention_mask", None)
@@ -192,7 +308,53 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
             
             # Compute PSY reward score
             try:
-                result = compute_diagnosis_score(response_text, ground_truth, True)
+                # Extract patient_id from reward_model_info or extra_info
+                patient_id = None
+                if isinstance(reward_model_info, dict):
+                    patient_id = reward_model_info.get("patient_id")
+                
+                # If not found in reward_model_info, try extra_info
+                if patient_id is None:
+                    try:
+                        extra_info_data = data_item.non_tensor_batch.get("extra_info", {})
+                        if isinstance(extra_info_data, dict):
+                            patient_id = extra_info_data.get("patient_id")
+                            
+                        # Debug info for patient_id extraction (only show when logging is enabled)
+                        if is_validation is not None and i == 0:
+                            if (is_validation == "val" and not printed_validation_example[0]) or \
+                               (is_validation == "train" and not printed_training_example[0]):
+                                mode_str = "验证" if is_validation == "val" else "训练"
+                                print(f"[DEBUG {mode_str}] extra_info_data: {extra_info_data}")
+                                print(f"[DEBUG {mode_str}] Extracted patient_id: {patient_id}")
+                    except Exception as e:
+                        if is_validation is not None and i == 0:
+                            if (is_validation == "val" and not printed_validation_example[0]) or \
+                               (is_validation == "train" and not printed_training_example[0]):
+                                mode_str = "验证" if is_validation == "val" else "训练"
+                                print(f"[DEBUG {mode_str}] Error extracting patient_id: {e}")
+                
+                # Use psy_reward_function if available (with or without tracker)
+                if psy_reward_function is not None:
+                    # Prepare extra_info for psy_reward_function
+                    extra_info_for_reward = {"patient_id": patient_id} if patient_id else None
+                    result = psy_reward_function(
+                        data_source="psy_diagnosis",
+                        solution_str=response_text,
+                        ground_truth=ground_truth,
+                        extra_info=extra_info_for_reward,
+                        use_symptom_reward=use_symptom_reward,
+                        tracker=tracker  # tracker can be None, psy_reward_function handles it
+                    )
+                else:
+                    # Fallback to original function
+                    result = compute_diagnosis_score(
+                        response_text, 
+                        ground_truth, 
+                        patient_id=patient_id,
+                        return_details=True, 
+                        use_symptom_reward=use_symptom_reward
+                    )
                 if isinstance(result, dict):
                     score = result.get("score", 0.0)
                     is_correct = result.get('acc', False)
@@ -209,12 +371,32 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
                 is_correct = False
                 format_ok = False
             
+            # 收集样本结果用于批量平均
+            if isinstance(result, dict):
+                batch_results.append(result)
+                
+                # 收集验证阶段的详细指标（用于返回给_validate方法）
+                psy_metrics["diagnosis_accuracy"].append(result.get("diagnosis_score", 0.0))
+                psy_metrics["symptom_accuracy"].append(result.get("symptom_coverage", 0.0))
+                psy_metrics["format_accuracy"].append(result.get("format_score", 0.0))
+                psy_metrics["exact_match"].append(float(result.get("acc", False)))
+                psy_metrics["total_symptoms"].append(result.get("total_symptoms", 0))
+                psy_metrics["extracted_symptoms_count"].append(len(result.get("extracted_symptoms", [])))
+            
             # Update batch statistics
             batch_total_score += score
             if is_correct:
                 batch_correct += 1
             if format_ok:
                 batch_format_correct += 1
+            
+            # Update symptom statistics (only when symptom reward is enabled)
+            if use_symptom_reward and isinstance(result, dict):
+                symptom_coverage = result.get('symptom_coverage', 0.0)
+                # 只有当有有效的症状数据时才统计（避免None或错误情况）
+                if 'error' not in result and patient_id is not None:
+                    batch_symptom_coverage += symptom_coverage
+                    batch_symptom_samples += 1
             
             # Print validation example for the first sample
             if is_validation == "val" and not printed_validation_example[0] and i == 0:
@@ -246,6 +428,19 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
                     print(f"提取的诊断: {extracted}")
                     print(f"格式正确: {'是' if format_ok else '否'}")
                     print(f"诊断正确: {'是' if answer_correct else '否'}")
+                    
+                    # 显示症状相关信息（如果启用了症状奖励）
+                    if use_symptom_reward:
+                        symptom_coverage = result.get('symptom_coverage', 0.0)
+                        extracted_symptoms = result.get('extracted_symptoms', [])
+                        total_symptoms = result.get('total_symptoms', 0)
+                        diagnosis_score = result.get('diagnosis_score', 0.0)
+                        print(f"患者ID: {patient_id if patient_id else 'N/A'}")
+                        print(f"诊断分数: {diagnosis_score:.3f}")
+                        print(f"症状覆盖率: {symptom_coverage:.3f}")
+                        print(f"提取症状数: {len(extracted_symptoms)}/{total_symptoms}")
+                        if extracted_symptoms:
+                            print(f"提取的症状: {extracted_symptoms}")
                     
                     if 'error' in result:
                         print(f"计算错误: {result['error']}")
@@ -284,6 +479,19 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
                     print(f"格式正确: {'是' if format_ok else '否'}")
                     print(f"诊断正确: {'是' if answer_correct else '否'}")
                     
+                    # 显示症状相关信息（如果启用了症状奖励）
+                    if use_symptom_reward:
+                        symptom_coverage = result.get('symptom_coverage', 0.0)
+                        extracted_symptoms = result.get('extracted_symptoms', [])
+                        total_symptoms = result.get('total_symptoms', 0)
+                        diagnosis_score = result.get('diagnosis_score', 0.0)
+                        print(f"患者ID: {patient_id if patient_id else 'N/A'}")
+                        print(f"诊断分数: {diagnosis_score:.3f}")
+                        print(f"症状覆盖率: {symptom_coverage:.3f}")
+                        print(f"提取症状数: {len(extracted_symptoms)}/{total_symptoms}")
+                        if extracted_symptoms:
+                            print(f"提取的症状: {extracted_symptoms}")
+                    
                     if 'error' in result:
                         print(f"计算错误: {result['error']}")
                 
@@ -293,12 +501,22 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
             reward_scores.append(score)
             extra_info["reward"].append(score)
         
+        # 在批次结束时计算平均指标并记录到tracking系统
+        if batch_results and tracker is not None:
+            # 计算批次平均指标
+            batch_avg_metrics = calculate_batch_average_metrics(batch_results)
+            
+            # 记录到tracking系统
+            log_batch_metrics_to_tracking(batch_avg_metrics, tracker=tracker)
+        
         # Update global rollout statistics (only for training mode with logging enabled)
         if is_validation == "train":
             rollout_stats['total_samples'] += batch_size
             rollout_stats['correct_samples'] += batch_correct
             rollout_stats['format_correct_samples'] += batch_format_correct
             rollout_stats['total_score'] += batch_total_score
+            rollout_stats['total_symptom_coverage'] += batch_symptom_coverage
+            rollout_stats['symptom_samples'] += batch_symptom_samples
             rollout_stats['batch_count'] += 1
             rollout_stats['rollout_count'] += 1
             
@@ -308,6 +526,11 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
                 format_accuracy = rollout_stats['format_correct_samples'] / rollout_stats['total_samples'] * 100
                 avg_score = rollout_stats['total_score'] / rollout_stats['total_samples']
                 
+                # 计算症状识别率（仅在启用症状奖励时显示）
+                symptom_accuracy = 0.0
+                if use_symptom_reward and rollout_stats['symptom_samples'] > 0:
+                    symptom_accuracy = rollout_stats['total_symptom_coverage'] / rollout_stats['symptom_samples'] * 100
+                
                 print("\n" + "-"*60)
                 print(f"【GRPO Rollout 统计 - Batch {rollout_stats['batch_count']}】")
                 print(f"总样本数: {rollout_stats['total_samples']}")
@@ -316,6 +539,16 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
                 print(f"诊断正确率: {accuracy:.2f}%")
                 print(f"格式正确率: {format_accuracy:.2f}%")
                 print(f"平均奖励分数: {avg_score:.4f}")
+                
+                # 显示症状识别统计（仅在启用症状奖励时）
+                if use_symptom_reward:
+                    print(f"症状样本数: {rollout_stats['symptom_samples']}")
+                    print(f"平均症状识别率: {symptom_accuracy:.2f}%")
+                    print(f"当前批次症状样本: {batch_symptom_samples}")
+                    if batch_symptom_samples > 0:
+                        batch_symptom_accuracy = batch_symptom_coverage / batch_symptom_samples * 100
+                        print(f"当前批次症状识别率: {batch_symptom_accuracy:.2f}%")
+                
                 print(f"当前批次正确率: {batch_correct}/{batch_size} = {batch_correct/batch_size*100:.2f}%")
                 print("-"*60 + "\n")
         
@@ -343,10 +576,19 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None):
             token_level_rewards[:, -1] = reward_tensor
         
         if return_dict:
-            return {
+            # 准备返回的字典，包含PSY相关的详细指标
+            result_dict = {
                 "reward_tensor": token_level_rewards,
-                # "reward_extra_info": extra_info,
+                "reward_extra_info": extra_info,
             }
+            
+            # 添加PSY相关的详细指标到reward_extra_info中（但不覆盖reward列表）
+            for metric_name, metric_values in psy_metrics.items():
+                if metric_values:  # 只有当有数据时才添加
+                    # 使用不同的键名避免与reward冲突
+                    result_dict["reward_extra_info"][f"psy_{metric_name}"] = metric_values
+            
+            return result_dict
         else:
             return token_level_rewards
     
@@ -538,13 +780,16 @@ class TaskRunner:
             show_train_examples = config.reward_model.get("show_training_examples", True)
             show_val_examples = config.reward_model.get("show_validation_examples", True)
             
+            # Check symptom reward configuration
+            use_symptom_reward = config.reward_model.get("use_symptom_reward", False)
+            
             # Determine logging modes based on configuration
             train_log_mode = "train" if show_train_examples else None
             val_log_mode = "val" if show_val_examples else None
             
             # Create separate reward functions for training and validation
-            train_psy_reward_fn = create_psy_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer)
-            val_psy_reward_fn = create_psy_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer)
+            train_psy_reward_fn = create_psy_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward)
+            val_psy_reward_fn = create_psy_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward)
             
             reward_fn = train_psy_reward_fn
             val_reward_fn = val_psy_reward_fn
@@ -552,7 +797,8 @@ class TaskRunner:
             # Print configuration status
             train_status = "开启日志" if show_train_examples else "关闭日志"
             val_status = "开启日志" if show_val_examples else "关闭日志"
-            print(f"Using PSY reward function - 训练模式: {train_status}, 验证模式: {val_status}")
+            symptom_status = "启用症状奖励" if use_symptom_reward else "仅诊断奖励"
+            print(f"Using PSY reward function - 训练模式: {train_status}, 验证模式: {val_status}, 奖励模式: {symptom_status}")
         else:
             reward_fn = load_reward_manager(
                 config, tokenizer, num_examine=0, **config.reward_model.get("reward_kwargs", {})
