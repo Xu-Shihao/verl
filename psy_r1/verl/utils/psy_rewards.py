@@ -35,18 +35,25 @@ except ImportError:
     VERL_TRACKING_AVAILABLE = False
     Tracking = None
 
-# 全局变量，用于缓存症状数据和映射关系
+# 全局变量，用于缓存症状数据
 _symptom_data_cache = None
-_mapping_cache = None
+_mapping_cache = None  # 保留以保持兼容性，但不再使用
 _symptom_columns_cache = None
 
 
 def load_symptom_data():
     """
-    加载症状数据和映射关系
+    加载症状数据，直接从新的症状识别结果文件中读取
+    
+    注意：已更新为使用新的数据文件 symptom_identification_from_pkl_results.xlsx
+    这个文件直接包含 patient_id 列，无需再通过映射文件进行转换
+    
+    文件格式预期：
+    - 第一列或名为 'patient_id' 的列：患者ID
+    - 其余列：各种症状，值为0-1之间的概率
     
     Returns:
-        tuple: (症状数据DataFrame, 映射字典, 症状列名列表)
+        tuple: (症状数据DataFrame, None (不再需要映射), 症状列名列表)
     """
     global _symptom_data_cache, _mapping_cache, _symptom_columns_cache
     
@@ -58,29 +65,41 @@ def load_symptom_data():
         current_dir = os.path.dirname(os.path.abspath(__file__))
         base_dir = os.path.dirname(os.path.dirname(current_dir))  # 向上两级到psy_r1目录
         
-        # 读取症状数据
-        symptom_file = os.path.join(base_dir, 'metadata', 'symptom_identification_conversation_individual_2646_patients_138_Qwen3-32B_0715.xlsx')
+        # 读取新的症状数据文件
+        symptom_file = os.path.join(base_dir, 'metadata', 'symptom_identification_from_pkl_results.xlsx')
         symptom_df = pd.read_excel(symptom_file)
         
-        # 读取映射关系
-        mapping_file = os.path.join(base_dir, 'metadata', 'pat_smhc_train_visit_mapping.json')
-        with open(mapping_file, 'r', encoding='utf-8') as f:
-            mapping_list = json.load(f)
+        # 获取症状列名（排除patient_id列和其他非症状列）
+        # 假设第一列是patient_id，其余列都是症状
+        non_symptom_columns = ['patient_id', 'Patient_ID', 'PatientID', 'ID', 'id', "VisitNumber"]
+        symptom_columns = [col for col in symptom_df.columns if col not in non_symptom_columns]
         
-        # 将映射列表转换为字典，以patient_id为键，visit_number为值
-        patient_to_visit = {item['patient_id']: item['visit_number'] for item in mapping_list}
-        # 同时创建反向映射，以visit_number为键，patient_id为值
-        visit_to_patient = {item['visit_number']: item['patient_id'] for item in mapping_list}
+        # 确保patient_id列存在
+        patient_id_col = None
+        for col in ['patient_id', 'Patient_ID', 'PatientID', 'ID', 'id', "VisitNumber"]:
+            if col in symptom_df.columns:
+                patient_id_col = col
+                break
         
-        # 获取症状列名（排除VisitNumber列）
-        symptom_columns = [col for col in symptom_df.columns if col != 'VisitNumber']
+        if patient_id_col is None:
+            # 如果没有找到明确的patient_id列，假设第一列是patient_id
+            patient_id_col = symptom_df.columns[0]
+            print(f"[WARNING] 未找到明确的patient_id列，使用第一列: {patient_id_col}")
         
-        # 缓存数据
+        # 如果列名不是'patient_id'，重命名为'patient_id'以保持一致性
+        if patient_id_col != 'patient_id':
+            symptom_df = symptom_df.rename(columns={patient_id_col: 'patient_id'})
+            
+        # 更新症状列名（移除patient_id）
+        symptom_columns = [col for col in symptom_df.columns if col != 'patient_id']
+        
+        # 缓存数据（不再需要映射关系）
         _symptom_data_cache = symptom_df
-        _mapping_cache = {'patient_to_visit': patient_to_visit, 'visit_to_patient': visit_to_patient}
+        _mapping_cache = None  # 不再需要映射关系
         _symptom_columns_cache = symptom_columns
         
         print(f"[INFO] 成功加载症状数据: {symptom_df.shape[0]} 条记录, {len(symptom_columns)} 个症状")
+        print(f"[INFO] Patient ID列: patient_id, 症状列数: {len(symptom_columns)}")
         
         return symptom_df, _mapping_cache, symptom_columns
         
@@ -187,7 +206,9 @@ def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
 
 def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: str) -> Dict[str, Any]:
     """
-    计算症状覆盖率
+    计算症状覆盖率，直接从新的症状数据文件中获取数据
+    
+    注意：已更新为直接使用 patient_id 查询，无需映射转换
     
     Args:
         patient_id_raw: 患者ID（可能是格式为 "{id}_conv{i}" 的字符串或直接的数字ID）
@@ -198,9 +219,9 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
     """
     try:
         # 加载症状数据
-        symptom_df, mapping, symptom_columns = load_symptom_data()
+        symptom_df, _, symptom_columns = load_symptom_data()
         
-        if symptom_df is None or mapping is None or symptom_columns is None:
+        if symptom_df is None or symptom_columns is None:
             return {
                 "symptom_coverage": 0.0,
                 "extracted_symptoms": [],
@@ -233,26 +254,15 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
                 "error": f"Invalid patient ID format: {patient_id_raw}, error: {str(e)}"
             }
         
-        # 获取visit_number
-        visit_number = mapping['patient_to_visit'].get(patient_id)
-        if visit_number is None:
-            return {
-                "symptom_coverage": 0.0,
-                "extracted_symptoms": [],
-                "ground_truth_symptoms": [],
-                "total_symptoms": 0,
-                "error": f"Patient ID {patient_id} (from {patient_id_raw}) not found in mapping"
-            }
-        
-        # 从症状数据中查找对应的记录
-        patient_row = symptom_df[symptom_df['VisitNumber'] == visit_number]
+        # 直接从症状数据中查找对应的记录，不再需要映射
+        patient_row = symptom_df[symptom_df['patient_id'] == patient_id]
         if patient_row.empty:
             return {
                 "symptom_coverage": 0.0,
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
-                "error": f"Visit number {visit_number} not found in symptom data"
+                "error": f"Patient ID {patient_id} (from {patient_id_raw}) not found in symptom data"
             }
         
         # 获取患者的症状真值（概率大于0.5的症状）
