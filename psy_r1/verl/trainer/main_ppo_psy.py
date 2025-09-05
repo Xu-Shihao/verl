@@ -126,7 +126,7 @@ def log_batch_metrics_to_tracking(batch_avg_metrics, tracker=None):
     except Exception as e:
         print(f"[WARNING] Failed to log batch metrics: {e}")
 
-def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, tracker=None):
+def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, tracker=None, symptom_alpha=0.1):
     """
     Create PSY-specific reward function for psychological diagnosis
     
@@ -135,7 +135,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         tokenizer: The tokenizer to use for decoding tokens
         use_symptom_reward: Whether to enable symptom identification reward
         tracker: Tracking instance for logging metrics to verl official tracking system
-    
+        symptom_alpha: The alpha value for symptom coverage in the reward function
     Returns:
         A reward function compatible with VERL reward manager interface
     """
@@ -164,13 +164,14 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         'batch_count': 0
     }
     
-    def psy_reward_wrapper(data, return_dict=False):
+    def psy_reward_wrapper(data, return_dict=False, symptom_alpha=0.1):
         """
         Wrapper function that adapts PSY reward function to VERL interface
         
         Args:
             data: DataProto object containing batch data
             return_dict: Whether to return detailed results as dict
+            symptom_alpha: The alpha value for symptom coverage in the reward function
             
         Returns:
             reward_tensor or dict with reward information
@@ -344,6 +345,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                         ground_truth=ground_truth,
                         extra_info=extra_info_for_reward,
                         use_symptom_reward=use_symptom_reward,
+                        symptom_alpha=symptom_alpha,
                         tracker=tracker  # tracker can be None, psy_reward_function handles it
                     )
                 else:
@@ -779,6 +781,7 @@ class TaskRunner:
             # Check logging configurations
             show_train_examples = config.reward_model.get("show_training_examples", True)
             show_val_examples = config.reward_model.get("show_validation_examples", True)
+            symptom_alpha = config.reward_model.get("symptom_alpha", 0)
             
             # Check symptom reward configuration
             use_symptom_reward = config.reward_model.get("use_symptom_reward", False)
@@ -788,8 +791,8 @@ class TaskRunner:
             val_log_mode = "val" if show_val_examples else None
             
             # Create separate reward functions for training and validation
-            train_psy_reward_fn = create_psy_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward)
-            val_psy_reward_fn = create_psy_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward)
+            train_psy_reward_fn = create_psy_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward, symptom_alpha=symptom_alpha)
+            val_psy_reward_fn = create_psy_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer, use_symptom_reward=use_symptom_reward, symptom_alpha=symptom_alpha)
             
             reward_fn = train_psy_reward_fn
             val_reward_fn = val_psy_reward_fn

@@ -473,7 +473,8 @@ def compute_diagnosis_score(
     ground_truth: Union[str, List[str]], 
     patient_id: Union[str, int] = None,
     return_details: bool = False,
-    use_symptom_reward: bool = False
+    use_symptom_reward: bool = False,
+    symptom_alpha: float = 0.1
 ) -> Union[float, Dict[str, Any]]:
     """
     计算问诊诊断结果的正确率分数，可选包含症状覆盖率
@@ -513,8 +514,8 @@ def compute_diagnosis_score(
         
         # 计算总分数：根据是否启用症状奖励来决定
         if use_symptom_reward:
-            # 新的评分公式：诊断正确率 + 0.5 * 症状识别准确率
-            total_score = diagnosis_score + 0.5 * symptom_coverage
+            # 新的评分公式：诊断正确率 + symptom_alpha * 症状识别准确率
+            total_score = diagnosis_score + symptom_alpha * symptom_coverage
         else:
             # 传统评分：仅基于诊断正确率
             total_score = diagnosis_score
@@ -554,7 +555,7 @@ def compute_diagnosis_score(
             return 0.0
 
 
-def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, extra_info=None, use_symptom_reward: bool = False, tracker: 'Tracking' = None):
+def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, extra_info=None, use_symptom_reward: bool = False, symptom_alpha: float = 0.1, tracker: 'Tracking' = None):
     """
     问诊场景的reward函数，兼容现有的reward函数接口
     
@@ -576,7 +577,7 @@ def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, 
             patient_id = extra_info.get("patient_id")
         
         # 计算诊断正确率和症状覆盖率（根据参数决定是否启用症状奖励）
-        result = compute_diagnosis_score(solution_str, ground_truth, patient_id=patient_id, return_details=True, use_symptom_reward=use_symptom_reward)
+        result = compute_diagnosis_score(solution_str, ground_truth, patient_id=patient_id, return_details=True, use_symptom_reward=use_symptom_reward, symptom_alpha=symptom_alpha)
         
         # 确保result是字典类型
         if isinstance(result, dict):
