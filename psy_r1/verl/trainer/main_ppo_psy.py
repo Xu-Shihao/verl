@@ -164,17 +164,19 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         'batch_count': 0
     }
     
-    def psy_reward_wrapper(data, return_dict=False, symptom_alpha=0.1):
+    def psy_reward_wrapper(data, return_dict=False):
         """
         Wrapper function that adapts PSY reward function to VERL interface
         
         Args:
             data: DataProto object containing batch data
             return_dict: Whether to return detailed results as dict
-            symptom_alpha: The alpha value for symptom coverage in the reward function
             
         Returns:
             reward_tensor or dict with reward information
+            
+        Note:
+            Uses the symptom_alpha value from the outer scope (closure variable)
         """
         
         # Extract necessary information from data

@@ -208,10 +208,10 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
     """
     计算症状覆盖率，直接从新的症状数据文件中获取数据
     
-    注意：已更新为直接使用 patient_id 查询，无需映射转换
+    注意：直接使用完整的 patient_id 查询，保持原始格式（包括 "_conv" 部分）
     
     Args:
-        patient_id_raw: 患者ID（可能是格式为 "{id}_conv{i}" 的字符串或直接的数字ID）
+        patient_id_raw: 患者ID（完整格式，如 "{id}_conv{i}" 或直接的ID）
         model_response: 模型回答
         
     Returns:
@@ -230,31 +230,24 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
                 "error": "Failed to load symptom data"
             }
         
-        # 解析patient_id，处理 "{id}_conv{i}" 格式
+        # 使用完整的patient_id进行查询（保持 "_conv" 部分）
         try:
             if patient_id_raw is None:
                 raise ValueError("patient_id cannot be None")
-                
-            if isinstance(patient_id_raw, str) and "_conv" in patient_id_raw:
-                # 提取 {id}_conv{i} 中的 id 部分
-                id_part = patient_id_raw.split("_conv")[0]
-                if not id_part:  # 空ID部分
-                    raise ValueError("Empty ID part in patient_id")
-                patient_id = int(id_part)
-                # print(f"[DEBUG] 解析患者ID: {patient_id_raw} -> {patient_id}")
-            else:
-                # 直接转换为整数
-                patient_id = int(patient_id_raw)
-        except (ValueError, AttributeError, TypeError) as e:
+            
+            # 直接使用原始的patient_id（字符串或数字）
+            patient_id = patient_id_raw
+            
+        except Exception as e:
             return {
                 "symptom_coverage": 0.0,
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
-                "error": f"Invalid patient ID format: {patient_id_raw}, error: {str(e)}"
+                "error": f"Invalid patient ID: {patient_id_raw}, error: {str(e)}"
             }
         
-        # 直接从症状数据中查找对应的记录，不再需要映射
+        # 直接从症状数据中查找对应的记录，使用完整的patient_id
         patient_row = symptom_df[symptom_df['patient_id'] == patient_id]
         if patient_row.empty:
             return {
@@ -262,7 +255,7 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
-                "error": f"Patient ID {patient_id} (from {patient_id_raw}) not found in symptom data"
+                "error": f"Patient ID {patient_id} not found in symptom data"
             }
         
         # 获取患者的症状真值（概率大于0.5的症状）
