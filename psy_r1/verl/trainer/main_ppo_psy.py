@@ -34,99 +34,7 @@ import torch
 # 简化版本：直接使用原有的 RayPPOTrainer，不做复杂的集成
 # 我们将在 reward 函数中检查是否有可用的 tracker
 
-def calculate_batch_average_metrics(batch_results):
-    """
-    计算批次中所有样本的平均指标
-    
-    Args:
-        batch_results: 批次中所有样本的结果列表
-        
-    Returns:
-        包含平均指标的字典
-    """
-    if not batch_results:
-        return {}
-    
-    # 初始化累计值
-    total_score = 0.0
-    total_diagnosis_score = 0.0
-    total_symptom_coverage = 0.0
-    total_format_score = 0.0
-    total_acc = 0.0
-    total_symptom_count = 0
-    total_extracted_symptom_count = 0
-    valid_samples = 0
-    symptom_samples = 0
-    
-    # 累计所有样本的指标
-    for result in batch_results:
-        if isinstance(result, dict) and 'error' not in result:
-            valid_samples += 1
-            
-            total_score += result.get('score', 0.0)
-            total_diagnosis_score += result.get('diagnosis_score', 0.0)
-            total_format_score += result.get('format_score', 0.0)
-            total_acc += float(result.get('acc', False))
-            
-            # 症状相关指标（只有在有症状数据时才统计）
-            if 'symptom_coverage' in result and result.get('total_symptoms', 0) > 0:
-                total_symptom_coverage += result.get('symptom_coverage', 0.0)
-                total_symptom_count += result.get('total_symptoms', 0)
-                total_extracted_symptom_count += len(result.get('extracted_symptoms', []))
-                symptom_samples += 1
-    
-    if valid_samples == 0:
-        return {}
-    
-    # 计算平均值
-    avg_metrics = {
-        'score': total_score / valid_samples,
-        'diagnosis_score': total_diagnosis_score / valid_samples,
-        'format_score': total_format_score / valid_samples,
-        'acc': total_acc / valid_samples,
-        'total_symptoms': total_symptom_count / max(symptom_samples, 1),
-        'extracted_symptoms_count': total_extracted_symptom_count / max(symptom_samples, 1),
-    }
-    
-    # 症状覆盖率（只有在有症状样本时才计算）
-    if symptom_samples > 0:
-        avg_metrics['symptom_coverage'] = total_symptom_coverage / symptom_samples
-    else:
-        avg_metrics['symptom_coverage'] = 0.0
-    
-    return avg_metrics
-
-
-def log_batch_metrics_to_tracking(batch_avg_metrics, tracker=None):
-    """
-    将批次平均指标记录到tracking系统
-    
-    Args:
-        batch_avg_metrics: 批次平均指标字典
-        tracker: Tracking实例
-    """
-    if not batch_avg_metrics or tracker is None:
-        return
-    
-    # 转换为tracking格式的指标
-    tracking_metrics = {
-        "rewards/total_score": batch_avg_metrics.get('score', 0.0),
-        "rewards/diagnosis_accuracy": batch_avg_metrics.get('diagnosis_score', 0.0),
-        "rewards/symptom_accuracy": batch_avg_metrics.get('symptom_coverage', 0.0),
-        "rewards/format_accuracy": batch_avg_metrics.get('format_score', 0.0),
-        "rewards/exact_match": batch_avg_metrics.get('acc', 0.0),
-        "symptoms/total_count": batch_avg_metrics.get('total_symptoms', 0.0),
-        "symptoms/extracted_count": batch_avg_metrics.get('extracted_symptoms_count', 0.0),
-    }
-    
-    try:
-        # 记录到tracking系统
-        tracker.log(data=tracking_metrics)
-        print(f"[INFO] Logged batch average metrics: {tracking_metrics}")
-    except Exception as e:
-        print(f"[WARNING] Failed to log batch metrics: {e}")
-
-def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, tracker=None, symptom_alpha=0.1):
+def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, symptom_alpha=0.1):
     """
     Create PSY-specific reward function for psychological diagnosis
     
@@ -134,7 +42,6 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         is_validation: Mode for logging control - "val" for validation, "train" for training, None for no logs
         tokenizer: The tokenizer to use for decoding tokens
         use_symptom_reward: Whether to enable symptom identification reward
-        tracker: Tracking instance for logging metrics to verl official tracking system
         symptom_alpha: The alpha value for symptom coverage in the reward function
     Returns:
         A reward function compatible with VERL reward manager interface
@@ -214,8 +121,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         batch_symptom_coverage = 0.0  # 当前批次症状覆盖率累计
         batch_symptom_samples = 0     # 当前批次有症状数据的样本数
         
-        # 收集批次结果用于计算平均值
-        batch_results = []
+        # 注意：不再需要收集批次结果，VERL trainer会自动处理PSY指标的平均值计算
         
         # Calculate valid response lengths using attention mask
         attention_mask = data.batch.get("attention_mask", None)
@@ -337,7 +243,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                                 mode_str = "验证" if is_validation == "val" else "训练"
                                 print(f"[DEBUG {mode_str}] Error extracting patient_id: {e}")
                 
-                # Use psy_reward_function if available (with or without tracker)
+                # Use psy_reward_function if available (without individual tracking)
                 if psy_reward_function is not None:
                     # Prepare extra_info for psy_reward_function
                     extra_info_for_reward = {"patient_id": patient_id} if patient_id else None
@@ -348,7 +254,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                         extra_info=extra_info_for_reward,
                         use_symptom_reward=use_symptom_reward,
                         symptom_alpha=symptom_alpha,
-                        tracker=tracker  # tracker can be None, psy_reward_function handles it
+                        tracker=None  # 不传递tracker，避免个别样本记录，只在批次级别记录
                     )
                 else:
                     # Fallback to original function
@@ -375,11 +281,8 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                 is_correct = False
                 format_ok = False
             
-            # 收集样本结果用于批量平均
+            # 收集验证阶段的详细指标（用于返回给_validate方法）
             if isinstance(result, dict):
-                batch_results.append(result)
-                
-                # 收集验证阶段的详细指标（用于返回给_validate方法）
                 psy_metrics["diagnosis_accuracy"].append(result.get("diagnosis_score", 0.0))
                 psy_metrics["symptom_accuracy"].append(result.get("symptom_coverage", 0.0))
                 psy_metrics["format_accuracy"].append(result.get("format_score", 0.0))
@@ -505,13 +408,9 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
             reward_scores.append(score)
             extra_info["reward"].append(score)
         
-        # 在批次结束时计算平均指标并记录到tracking系统
-        if batch_results and tracker is not None:
-            # 计算批次平均指标
-            batch_avg_metrics = calculate_batch_average_metrics(batch_results)
-            
-            # 记录到tracking系统
-            log_batch_metrics_to_tracking(batch_avg_metrics, tracker=tracker)
+        # 注意：不需要在这里进行批次级别的tracking记录
+        # VERL trainer 会自动从reward_extra_info中提取psy_指标并计算平均值
+        # 参见 verl/trainer/ppo/ray_trainer.py 中的 extract_psy_metrics 函数
         
         # Update global rollout statistics (only for training mode with logging enabled)
         if is_validation == "train":

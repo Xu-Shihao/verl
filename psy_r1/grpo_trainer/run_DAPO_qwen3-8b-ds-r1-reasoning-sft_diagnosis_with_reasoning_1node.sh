@@ -4,7 +4,7 @@
 # 设置环境proxy
 export https_proxy=http://10.119.16.227:7890 http_proxy=http://10.119.16.227:7890 all_proxy=socks5://10.119.16.227:7890
 
-wandb login --relogin $WANDB_API_KEY
+wandb login --relogin d8e131b9817bc59353326755d6db8b705a4d8d4d
 
 # 设置日志路径
 set -x
@@ -27,7 +27,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     data.max_response_length=3096 \
     data.filter_overlong_prompts=True \
     data.truncation='error' \
-    actor_rollout_ref.model.path=/tcci_mnt/shihao/outputs/qwen3-8B_auxiliary_diagnosis_lora_sft_ds-r1_v4_use_symptoms_true \
+    actor_rollout_ref.model.path=/tcci_mnt/shihao/outputs/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2 \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.actor.ppo_mini_batch_size=32 \
@@ -51,7 +51,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     trainer.critic_warmup=0.1 \
     trainer.logger=['console','wandb'] \
     trainer.project_name='SMHC_diagnosis_with_reasoning_RL' \
-    trainer.experiment_name='qwen3_8B_symptoms_reasoning_lora_sft_ds-r1_8_gpu' \
+    trainer.experiment_name='qwen3_8B_reasoning_lora_sft_ds-r1_v2_8_gpu' \
     trainer.n_gpus_per_node=8 \
     trainer.nnodes=1 \
     trainer.save_freq=50 \

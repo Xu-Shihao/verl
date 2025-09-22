@@ -4,9 +4,7 @@
 # 设置环境proxy
 export https_proxy=http://10.119.16.227:7890 http_proxy=http://10.119.16.227:7890 all_proxy=socks5://10.119.16.227:7890
 
-export WANDB_API_KEY=d8e131b9817bc59353326755d6db8b705a4d8d4d
-
-wandb login --relogin d8e131b9817bc59353326755d6db8b705a4d8d4d
+wandb login --relogin $WANDB_API_KEY
 
 set -x
 
