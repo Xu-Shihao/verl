@@ -5,29 +5,32 @@
 # 设置环境proxy
 export https_proxy=http://10.119.16.227:7890 http_proxy=http://10.119.16.227:7890 all_proxy=socks5://10.119.16.227:7890
 
+export WANDB_API_KEY=d8e131b9817bc59353326755d6db8b705a4d8d4d
+
+
 wandb login --relogin $WANDB_API_KEY
 
 # 设置日志路径
 set -x
 
 # 创建日志路径
-LOG_DIR="/mnt/tcci/shihao/project/verl/psy_r1/logs"
+LOG_DIR="/tcci_mnt/shihao/project/verl/psy_r1/logs"
 mkdir -p $LOG_DIR
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
-# MODEL_PATH="/mnt/tcci/shihao/outputs/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
-# MODEL_BASE_NAME="qwen3-8B"
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
+MODEL_BASE_NAME="qwen3-8B"
 
-MODEL_PATH="/mnt/tcci/shihao/models/Qwen3-1.7B"
-MODEL_BASE_NAME="qwen3-1.7B"
+# MODEL_PATH="/tcci_mnt/shihao/models/Qwen3-1.7B"
+# MODEL_BASE_NAME="qwen3-1.7B"
 N_GPUS=8  # 使用8个GPU
 
 
 # 读取现在时间
 NOW=$(date +%Y%m%d_%H%M%S)
 
-HOME="/mnt/tcci/shihao/project/verl"
+HOME="/tcci_mnt/shihao/project/verl"
 
 HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     data.train_files=$HOME/psy_r1/SMHC_data_v4/train.parquet \
@@ -80,6 +83,6 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     trainer.save_freq=50 \
     trainer.test_freq=10 \
     trainer.total_epochs=15 \
-    trainer.val_before_train=False \
+    trainer.val_before_train=True \
     ray_init.num_cpus=32 \
     $@ 2>&1 | tee $LOG_DIR/dapo_${MODEL_BASE_NAME}_diagnosis_reasoning_direct_$NOW.log

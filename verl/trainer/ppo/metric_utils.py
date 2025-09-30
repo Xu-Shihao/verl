@@ -346,10 +346,14 @@ def process_validation_metrics(
     and majority voting results. It also performs bootstrap sampling to estimate statistics
     for different sample sizes.
 
+    The function now handles dictionary-type values in infos_dict by extracting numeric
+    fields and creating new variables with names in the format "original_name_field_name".
+
     Args:
         data_sources: List of data source identifiers for each sample.
         sample_inputs: List of input prompts corresponding to each sample.
         infos_dict: Dictionary mapping variable names to lists of values for each sample.
+                   Values can be numeric types or dictionaries containing numeric fields.
         seed: Random seed for bootstrap sampling. Defaults to 42.
 
     Returns:
@@ -378,6 +382,15 @@ def process_validation_metrics(
         >>> infos_dict = {"score": [0.8, 0.9, 0.7], "pred": ["A", "A", "B"]}
         >>> result = process_validation_metrics(data_sources, sample_inputs, infos_dict)
         >>> # result will contain statistics for each data source and variable
+        
+        >>> # Example with dictionary values
+        >>> infos_dict_with_dicts = {
+        ...     "reward_info": [
+        ...         {"score": 0.8, "diagnosis_score": 0.9}, 
+        ...         {"score": 0.7, "diagnosis_score": 0.8}
+        ...     ]
+        ... }
+        >>> # This will create variables "reward_info_score" and "reward_info_diagnosis_score"
     """
     # Group metrics by data source, prompt and variable
     data_src2prompt2var2vals = defaultdict(lambda: defaultdict(lambda: defaultdict(list)))
@@ -385,22 +398,61 @@ def process_validation_metrics(
         prompt = sample_inputs[sample_idx]
         var2vals = data_src2prompt2var2vals[data_source][prompt]
         for var_name, var_vals in infos_dict.items():
-            var2vals[var_name].append(var_vals[sample_idx])
+            sample_val = var_vals[sample_idx]
+            # 处理字典类型的值：如果是字典，尝试提取数值字段
+            if isinstance(sample_val, dict):
+                # 对于字典类型，我们需要展开其中的数值字段
+                for key, value in sample_val.items():
+                    if isinstance(value, (int, float, np.number)):
+                        # 创建新的变量名，格式为 原变量名_字典键名
+                        new_var_name = f"{var_name}_{key}"
+                        var2vals[new_var_name].append(value)
+            elif isinstance(sample_val, (int, float, np.number)):
+                # 对于数值类型，直接添加
+                var2vals[var_name].append(sample_val)
+            # 忽略字符串和其他非数值类型
 
     # Calculate metrics for each group
     data_src2prompt2var2metric = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
     for data_source, prompt2var2vals in data_src2prompt2var2vals.items():
         for prompt, var2vals in prompt2var2vals.items():
             for var_name, var_vals in var2vals.items():
+                # 跳过空列表
+                if not var_vals:
+                    continue
+                    
+                # 检查第一个元素的类型，跳过字符串类型
                 if isinstance(var_vals[0], str):
+                    continue
+                
+                # 确保所有值都是数值类型
+                numeric_vals = []
+                for val in var_vals:
+                    if isinstance(val, (int, float, np.number)):
+                        numeric_vals.append(float(val))
+                    elif isinstance(val, dict):
+                        # 如果仍然有字典类型，记录警告并跳过
+                        print(f"[WARNING] Found dict type in var_vals for {var_name}: {val}")
+                        continue
+                    else:
+                        # 尝试转换为浮点数
+                        try:
+                            numeric_vals.append(float(val))
+                        except (ValueError, TypeError):
+                            print(f"[WARNING] Cannot convert to float for {var_name}: {val}")
+                            continue
+                
+                # 如果没有有效的数值，跳过
+                if not numeric_vals:
+                    print(f"[WARNING] No valid numeric values found for {var_name}")
                     continue
 
                 metric = {}
-                n_resps = len(var_vals)
-                metric[f"mean@{n_resps}"] = np.mean(var_vals)
+                n_resps = len(numeric_vals)
+                metric[f"mean@{n_resps}"] = np.mean(numeric_vals)
 
                 if n_resps > 1:
-                    metric[f"std@{n_resps}"] = np.std(var_vals)
+                    metric[f"std@{n_resps}"] = np.std(numeric_vals)
 
                     ns = []
                     n = 2
@@ -411,13 +463,13 @@ def process_validation_metrics(
 
                     for n in ns:
                         [(bon_mean, bon_std), (won_mean, won_std)] = bootstrap_metric(
-                            data=var_vals, subset_size=n, reduce_fns=[np.max, np.min], seed=seed
+                            data=numeric_vals, subset_size=n, reduce_fns=[np.max, np.min], seed=seed
                         )
                         metric[f"best@{n}/mean"], metric[f"best@{n}/std"] = bon_mean, bon_std
                         metric[f"worst@{n}/mean"], metric[f"worst@{n}/std"] = won_mean, won_std
                         if var2vals.get("pred", None) is not None:
                             vote_data = [
-                                {"val": val, "pred": pred} for val, pred in zip(var_vals, var2vals["pred"], strict=True)
+                                {"val": val, "pred": pred} for val, pred in zip(numeric_vals, var2vals["pred"], strict=True)
                             ]
                             [(maj_n_mean, maj_n_std)] = bootstrap_metric(
                                 data=vote_data,
