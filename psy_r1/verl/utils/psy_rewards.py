@@ -109,29 +109,31 @@ def load_symptom_data():
         return None, None, None
 
 
-def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
+def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> Dict[str, bool]:
     """
-    从文本中提取提到的症状
+    从文本中提取症状的分类结果，返回所有症状的二分类结果
     
     Args:
         text: 要分析的文本
-        symptom_list: 症状列表
+        symptom_list: 完整的症状列表（138个症状）
         
     Returns:
-        提取到的症状列表
+        字典，键为症状名，值为布尔值（True表示在文本中提到且为正面描述，False表示未提到或为否定描述）
     """
     if not text or not symptom_list:
-        return []
+        return {symptom: False for symptom in symptom_list}
     
     # 转换为小写进行匹配
     text_lower = text.lower()
-    extracted_symptoms = []
+    symptom_classification = {}
     
     for symptom in symptom_list:
         if not symptom:
+            symptom_classification[symptom] = False
             continue
             
         symptom_lower = symptom.lower()
+        symptom_found = False
         
         # 检查症状是否在文本中
         if symptom_lower in text_lower:
@@ -146,7 +148,6 @@ def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
                 start = pos + 1
             
             # 对每个位置检查是否有否定词
-            symptom_found = False
             for pos in positions:
                 # 检查症状前后30个字符的上下文
                 context_start = max(0, pos-30)
@@ -159,10 +160,6 @@ def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
                 # 检查否定模式
                 is_negative = False
                 
-                # 1. 检查明确的否定模式
-                before_symptom = context[:symptom_pos_in_context]
-                after_symptom = context[symptom_pos_in_context + len(symptom_lower):]
-                
                 # 检查明确的否定关键词和模式
                 full_context_around = text_lower[max(0, pos-15):min(len(text_lower), pos+len(symptom_lower)+15)]
                 
@@ -170,8 +167,10 @@ def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
                 negative_patterns = [
                     r'但没有' + re.escape(symptom_lower),
                     r'无' + re.escape(symptom_lower) + r'(表现|症状|倾向)',
-                    r'无' + re.escape(symptom_lower) + r'$',  # "无xxx"在句尾
+                    r'无' + re.escape(symptom_lower) + r'(?=\s|$|，|。|；|！|？)',  # "无xxx"后面跟空格或标点
                     r'没有明显(的)?' + re.escape(symptom_lower),
+                    r'没有' + re.escape(symptom_lower),
+                    r'也没有' + re.escape(symptom_lower),
                     r'未见' + re.escape(symptom_lower),
                     r'无明显' + re.escape(symptom_lower),
                     r'排除' + re.escape(symptom_lower),
@@ -197,16 +196,81 @@ def extract_symptoms_from_text(text: str, symptom_list: List[str]) -> List[str]:
                 if not is_negative:
                     symptom_found = True
                     break
-            
-            if symptom_found and symptom not in extracted_symptoms:
-                extracted_symptoms.append(symptom)
+        
+        symptom_classification[symptom] = symptom_found
     
-    return extracted_symptoms
+    return symptom_classification
 
 
-def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: str) -> Dict[str, Any]:
+def calculate_symptom_classification_accuracy(predicted_symptoms: Dict[str, bool], ground_truth_symptoms: Dict[str, bool]) -> Dict[str, Any]:
     """
-    计算症状覆盖率，直接从新的症状数据文件中获取数据
+    计算症状分类的准确率，考虑真阳性、假阳性、真阴性、假阴性
+    
+    Args:
+        predicted_symptoms: 预测的症状分类结果 {symptom_name: bool}
+        ground_truth_symptoms: 真实的症状分类结果 {symptom_name: bool}
+        
+    Returns:
+        包含各种准确率指标的字典
+    """
+    if not predicted_symptoms or not ground_truth_symptoms:
+        return {
+            "accuracy": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "true_positive": 0,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0,
+            "total_symptoms": 0
+        }
+    
+    # 确保两个字典有相同的症状
+    all_symptoms = set(predicted_symptoms.keys()) | set(ground_truth_symptoms.keys())
+    
+    true_positive = 0   # 正确识别的阳性症状
+    false_positive = 0  # 错误识别的阴性症状（误报）
+    true_negative = 0   # 正确识别的阴性症状
+    false_negative = 0  # 错误识别的阳性症状（漏报）
+    
+    for symptom in all_symptoms:
+        pred = predicted_symptoms.get(symptom, False)
+        gt = ground_truth_symptoms.get(symptom, False)
+        
+        if pred and gt:
+            true_positive += 1
+        elif pred and not gt:
+            false_positive += 1
+        elif not pred and not gt:
+            true_negative += 1
+        else:  # not pred and gt
+            false_negative += 1
+    
+    total = len(all_symptoms)
+    
+    # 计算各种指标
+    accuracy = (true_positive + true_negative) / total if total > 0 else 0.0
+    precision = true_positive / (true_positive + false_positive) if (true_positive + false_positive) > 0 else 0.0
+    recall = true_positive / (true_positive + false_negative) if (true_positive + false_negative) > 0 else 0.0
+    f1_score = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    return {
+        "accuracy": accuracy,
+        "precision": precision,
+        "recall": recall,
+        "f1_score": f1_score,
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "true_negative": true_negative,
+        "false_negative": false_negative,
+        "total_symptoms": total
+    }
+
+
+def calculate_symptom_accuracy(patient_id_raw: Union[str, int], model_response: str) -> Dict[str, Any]:
+    """
+    计算症状分类准确率，使用多分类任务的评估方法
     
     注意：直接使用完整的 patient_id 查询，保持原始格式（包括 "_conv" 部分）
     
@@ -215,7 +279,7 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
         model_response: 模型回答
         
     Returns:
-        包含症状覆盖率信息的字典
+        包含症状分类准确率信息的字典
     """
     try:
         # 加载症状数据
@@ -223,10 +287,18 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
         
         if symptom_df is None or symptom_columns is None:
             return {
-                "symptom_coverage": 0.0,
+                "symptom_accuracy": 0.0,
+                "symptom_precision": 0.0,
+                "symptom_recall": 0.0,
+                "symptom_f1": 0.0,
+                "symptom_coverage": 0.0,  # 保持向后兼容
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
+                "true_positive": 0,
+                "false_positive": 0,
+                "true_negative": 0,
+                "false_negative": 0,
                 "error": "Failed to load symptom data"
             }
         
@@ -240,10 +312,18 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
             
         except Exception as e:
             return {
+                "symptom_accuracy": 0.0,
+                "symptom_precision": 0.0,
+                "symptom_recall": 0.0,
+                "symptom_f1": 0.0,
                 "symptom_coverage": 0.0,
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
+                "true_positive": 0,
+                "false_positive": 0,
+                "true_negative": 0,
+                "false_negative": 0,
                 "error": f"Invalid patient ID: {patient_id_raw}, error: {str(e)}"
             }
         
@@ -251,50 +331,81 @@ def calculate_symptom_coverage(patient_id_raw: Union[str, int], model_response: 
         patient_row = symptom_df[symptom_df['patient_id'] == patient_id]
         if patient_row.empty:
             return {
+                "symptom_accuracy": 0.0,
+                "symptom_precision": 0.0,
+                "symptom_recall": 0.0,
+                "symptom_f1": 0.0,
                 "symptom_coverage": 0.0,
                 "extracted_symptoms": [],
                 "ground_truth_symptoms": [],
                 "total_symptoms": 0,
+                "true_positive": 0,
+                "false_positive": 0,
+                "true_negative": 0,
+                "false_negative": 0,
                 "error": f"Patient ID {patient_id} not found in symptom data"
             }
         
-        # 获取患者的症状真值（概率大于0.5的症状）
+        # 获取患者的症状真值（所有138个症状的二分类结果）
         patient_symptoms = patient_row.iloc[0]
-        ground_truth_symptoms = []
+        ground_truth_symptoms_dict = {}
+        ground_truth_positive_symptoms = []
         
         for symptom in symptom_columns:
-            if patient_symptoms[symptom] > 0.5:
-                ground_truth_symptoms.append(symptom)
+            is_positive = patient_symptoms[symptom] > 0.5
+            ground_truth_symptoms_dict[symptom] = is_positive
+            if is_positive:
+                ground_truth_positive_symptoms.append(symptom)
         
-        if len(ground_truth_symptoms) == 0:
-            return {
-                "symptom_coverage": 1.0,  # 如果没有真实症状，覆盖率为100%
-                "extracted_symptoms": [],
-                "ground_truth_symptoms": [],
-                "total_symptoms": 0,
-            }
+        # 从模型回答中提取所有138个症状的分类结果
+        predicted_symptoms_dict = extract_symptoms_from_text(model_response, symptom_columns)
         
-        # 从模型回答中提取症状
-        extracted_symptoms = extract_symptoms_from_text(model_response, ground_truth_symptoms)
+        # 计算多分类准确率
+        classification_metrics = calculate_symptom_classification_accuracy(
+            predicted_symptoms_dict, 
+            ground_truth_symptoms_dict
+        )
         
-        # 计算覆盖率
-        coverage = len(extracted_symptoms) / len(ground_truth_symptoms) if ground_truth_symptoms else 0.0
+        # 提取被预测为阳性的症状列表（用于向后兼容）
+        extracted_positive_symptoms = [symptom for symptom, is_positive in predicted_symptoms_dict.items() if is_positive]
+        
+        # 计算传统的覆盖率（用于向后兼容）
+        coverage = 0.0
+        if ground_truth_positive_symptoms:
+            correctly_identified = len(set(extracted_positive_symptoms) & set(ground_truth_positive_symptoms))
+            coverage = correctly_identified / len(ground_truth_positive_symptoms)
         
         return {
-            "symptom_coverage": coverage,
-            "extracted_symptoms": extracted_symptoms,
-            "ground_truth_symptoms": ground_truth_symptoms,
-            "total_symptoms": len(ground_truth_symptoms),
+            "symptom_accuracy": classification_metrics["accuracy"],
+            "symptom_precision": classification_metrics["precision"],
+            "symptom_recall": classification_metrics["recall"],
+            "symptom_f1": classification_metrics["f1_score"],
+            "symptom_coverage": coverage,  # 保持向后兼容
+            "extracted_symptoms": extracted_positive_symptoms,
+            "ground_truth_symptoms": ground_truth_positive_symptoms,
+            "total_symptoms": len(symptom_columns),
+            "true_positive": classification_metrics["true_positive"],
+            "false_positive": classification_metrics["false_positive"],
+            "true_negative": classification_metrics["true_negative"],
+            "false_negative": classification_metrics["false_negative"],
         }
         
     except Exception as e:
-        print(f"[ERROR] 计算症状覆盖率失败: {str(e)}")
+        print(f"[ERROR] 计算症状分类准确率失败: {str(e)}")
         traceback.print_exc()
         return {
+            "symptom_accuracy": 0.0,
+            "symptom_precision": 0.0,
+            "symptom_recall": 0.0,
+            "symptom_f1": 0.0,
             "symptom_coverage": 0.0,
             "extracted_symptoms": [],
             "ground_truth_symptoms": [],
             "total_symptoms": 0,
+            "true_positive": 0,
+            "false_positive": 0,
+            "true_negative": 0,
+            "false_negative": 0,
             "error": str(e)
         }
 
@@ -325,10 +436,16 @@ def log_metrics_to_tracking(result_dict: Dict[str, Any], step: int = None, track
             metrics["rewards/diagnosis_accuracy"] = result_dict["diagnosis_accuracy"]
             
         # 症状识别准确率
-        if "symptom_coverage" in result_dict:
-            metrics["rewards/symptom_accuracy"] = result_dict["symptom_coverage"]
         if "symptom_accuracy" in result_dict:
             metrics["rewards/symptom_accuracy"] = result_dict["symptom_accuracy"]
+        if "symptom_coverage" in result_dict:
+            metrics["rewards/symptom_coverage"] = result_dict["symptom_coverage"]  # 保持向后兼容
+        if "symptom_precision" in result_dict:
+            metrics["rewards/symptom_precision"] = result_dict["symptom_precision"]
+        if "symptom_recall" in result_dict:
+            metrics["rewards/symptom_recall"] = result_dict["symptom_recall"]
+        if "symptom_f1" in result_dict:
+            metrics["rewards/symptom_f1"] = result_dict["symptom_f1"]
             
         # 格式正确率
         if "format_score" in result_dict:
@@ -508,17 +625,18 @@ def compute_diagnosis_score(
         # 计算诊断正确率分数
         diagnosis_score = 1.0 if is_correct else 0.0
         
-        # 计算症状覆盖率（仅在启用时）
-        symptom_info = {"symptom_coverage": 0.0}
+        # 计算症状分类准确率（仅在启用时）
+        symptom_info = {"symptom_accuracy": 0.0, "symptom_coverage": 0.0}
         if use_symptom_reward and patient_id is not None:
-            symptom_info = calculate_symptom_coverage(patient_id, model_response) # patient_id 为 {id}_conv{i}
+            symptom_info = calculate_symptom_accuracy(patient_id, model_response) # patient_id 为 {id}_conv{i}
         
-        symptom_coverage = symptom_info.get("symptom_coverage", 0.0)
+        symptom_accuracy = symptom_info.get("symptom_accuracy", 0.0)
+        symptom_coverage = symptom_info.get("symptom_coverage", 0.0)  # 保持向后兼容
         
         # 计算总分数：根据是否启用症状奖励来决定
         if use_symptom_reward:
-            # 新的评分公式：诊断正确率 + symptom_alpha * 症状识别准确率
-            total_score = diagnosis_score + symptom_alpha * symptom_coverage
+            # 新的评分公式：诊断正确率 + symptom_alpha * 症状分类准确率
+            total_score = diagnosis_score + symptom_alpha * symptom_accuracy
         else:
             # 传统评分：仅基于诊断正确率
             total_score = diagnosis_score
@@ -527,7 +645,8 @@ def compute_diagnosis_score(
             result = {
                 "score": total_score,
                 "diagnosis_score": diagnosis_score,
-                "symptom_coverage": symptom_coverage,
+                "symptom_accuracy": symptom_accuracy,
+                "symptom_coverage": symptom_coverage,  # 保持向后兼容
                 "format_score": 1.0 if format_correct else 0.0,
                 "acc": is_correct,
                 "extracted_diagnosis": extracted_diagnosis,
@@ -547,6 +666,7 @@ def compute_diagnosis_score(
             return {
                 "score": 0.0,
                 "diagnosis_score": 0.0,
+                "symptom_accuracy": 0.0,
                 "symptom_coverage": 0.0,
                 "format_score": 0.0,
                 "acc": False,
@@ -591,7 +711,7 @@ def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, 
             # 为了兼容wandb日志记录，添加一些额外的字段
             result["total_score"] = result.get("score", 0.0)
             result["diagnosis_accuracy"] = result.get("diagnosis_score", 0.0)
-            result["symptom_accuracy"] = result.get("symptom_coverage", 0.0)
+            # 注意：这里保持symptom_accuracy字段不变，因为现在直接使用symptom_accuracy而不是symptom_coverage
             
             # 注意：不再在这里立即记录指标到tracking系统
             # 指标记录现在在批次级别处理，以便记录平均值而不是每个样本的值
@@ -604,8 +724,8 @@ def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, 
                 "total_score": float(result),
                 "diagnosis_score": float(result),
                 "diagnosis_accuracy": float(result),
-                "symptom_coverage": 0.0,
                 "symptom_accuracy": 0.0,
+                "symptom_coverage": 0.0,
                 "format_score": 1.0 if result > 0 else 0.0,
                 "acc": bool(result > 0),
                 "extracted_diagnosis": "",
@@ -620,8 +740,8 @@ def psy_reward_function(data_source: str, solution_str: str, ground_truth: str, 
             "total_score": 0.0,
             "diagnosis_score": 0.0,
             "diagnosis_accuracy": 0.0,
-            "symptom_coverage": 0.0,
             "symptom_accuracy": 0.0,
+            "symptom_coverage": 0.0,
             "format_score": 0.0,
             "acc": False,
             "extracted_diagnosis": "",
@@ -698,6 +818,10 @@ def test_psy_rewards_with_tracking():
             
             print(f"  Total Score: {result.get('score', 0.0):.3f}")
             print(f"  Diagnosis Score: {result.get('diagnosis_score', 0.0):.3f}")
+            print(f"  Symptom Accuracy: {result.get('symptom_accuracy', 0.0):.3f}")
+            print(f"  Symptom Precision: {result.get('symptom_precision', 0.0):.3f}")
+            print(f"  Symptom Recall: {result.get('symptom_recall', 0.0):.3f}")
+            print(f"  Symptom F1: {result.get('symptom_f1', 0.0):.3f}")
             print(f"  Symptom Coverage: {result.get('symptom_coverage', 0.0):.3f}")
             print(f"  Diagnosis Correct: {'✓' if result.get('acc', False) else '✗'}")
             
@@ -706,6 +830,8 @@ def test_psy_rewards_with_tracking():
                 print(f"  Extracted Symptoms: {result['extracted_symptoms']}")
             if 'ground_truth_symptoms' in result:
                 print(f"  Ground Truth Symptoms: {result['ground_truth_symptoms']}")
+            if 'true_positive' in result:
+                print(f"  TP: {result['true_positive']}, FP: {result['false_positive']}, TN: {result['true_negative']}, FN: {result['false_negative']}")
         
         print("\n✓ Tracking integration test completed successfully!")
         return True
@@ -773,16 +899,20 @@ def test_psy_rewards():
         print(f"  传统模式分数: {result_traditional.get('score', 0.0):.3f}")
         print(f"  新模式分数: {result_with_symptoms.get('score', 0.0):.3f}")
         print(f"  诊断正确: {'✓' if result_traditional.get('acc', False) else '✗'}")
+        print(f"  症状准确率: {result_with_symptoms.get('symptom_accuracy', 0.0):.3f}")
         print(f"  症状覆盖率: {result_with_symptoms.get('symptom_coverage', 0.0):.3f}")
         
         result = result_with_symptoms  # 为了兼容后续代码
         
         # 确保result是字典类型
         if isinstance(result, dict):
-            print(f"Test {i+1}:")
-            print(f"  Total Score: {result.get('score', 0.0):.2f}")
-            print(f"  Diagnosis Score: {result.get('diagnosis_score', 0.0):.2f}")
-            print(f"  Symptom Coverage: {result.get('symptom_coverage', 0.0):.2f}")
+            print(f"  Total Score: {result.get('score', 0.0):.3f}")
+            print(f"  Diagnosis Score: {result.get('diagnosis_score', 0.0):.3f}")
+            print(f"  Symptom Accuracy: {result.get('symptom_accuracy', 0.0):.3f}")
+            print(f"  Symptom Precision: {result.get('symptom_precision', 0.0):.3f}")
+            print(f"  Symptom Recall: {result.get('symptom_recall', 0.0):.3f}")
+            print(f"  Symptom F1: {result.get('symptom_f1', 0.0):.3f}")
+            print(f"  Symptom Coverage: {result.get('symptom_coverage', 0.0):.3f}")
             print(f"  Extracted Diagnosis: '{result.get('extracted_diagnosis', '')}'")
             print(f"  Ground Truth: {test_case['ground_truth']}")
             print(f"  Diagnosis Correct: {result.get('acc', False)}")
@@ -790,6 +920,8 @@ def test_psy_rewards():
                 print(f"  Extracted Symptoms: {result['extracted_symptoms']}")
             if 'ground_truth_symptoms' in result:
                 print(f"  Ground Truth Symptoms: {result['ground_truth_symptoms']}")
+            if 'true_positive' in result:
+                print(f"  TP: {result['true_positive']}, FP: {result['false_positive']}, TN: {result['true_negative']}, FN: {result['false_negative']}")
         else:
             print(f"Test {i+1}: Score={result}")
         print()
@@ -798,10 +930,12 @@ def test_psy_rewards():
     print("Testing symptom extraction...")
     test_text = "患者有焦虑、心悸症状，但没有抑郁表现，无自杀倾向"
     test_symptoms = ["焦虑", "心悸", "抑郁", "自杀倾向", "失眠"]
-    extracted = extract_symptoms_from_text(test_text, test_symptoms)
+    extracted_dict = extract_symptoms_from_text(test_text, test_symptoms)
+    extracted_positive = [symptom for symptom, is_positive in extracted_dict.items() if is_positive]
     print(f"Text: {test_text}")
     print(f"Available symptoms: {test_symptoms}")
-    print(f"Extracted symptoms: {extracted}")
+    print(f"Extracted classification: {extracted_dict}")
+    print(f"Positive symptoms: {extracted_positive}")
     print()
 
 
