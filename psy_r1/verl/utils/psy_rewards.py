@@ -625,18 +625,18 @@ def compute_diagnosis_score(
         # 计算诊断正确率分数
         diagnosis_score = 1.0 if is_correct else 0.0
         
-        # 计算症状分类准确率（仅在启用时）
-        symptom_info = {"symptom_accuracy": 0.0, "symptom_coverage": 0.0}
-        if use_symptom_reward and patient_id is not None:
+        # 始终计算症状分类准确率（用于监控和评估）
+        symptom_info = {"symptom_accuracy": 0.0, "symptom_f1": 0.0, "symptom_coverage": 0.0}
+        if patient_id is not None:
             symptom_info = calculate_symptom_accuracy(patient_id, model_response) # patient_id 为 {id}_conv{i}
         
-        symptom_accuracy = symptom_info.get("symptom_accuracy", 0.0)
+        symptom_f1 = symptom_info.get("symptom_f1", 0.0)
         symptom_coverage = symptom_info.get("symptom_coverage", 0.0)  # 保持向后兼容
         
         # 计算总分数：根据是否启用症状奖励来决定
         if use_symptom_reward:
-            # 新的评分公式：诊断正确率 + symptom_alpha * 症状分类准确率
-            total_score = diagnosis_score + symptom_alpha * symptom_accuracy
+            # 新的评分公式：诊断正确率 + symptom_alpha * 症状F1分数
+            total_score = diagnosis_score + symptom_alpha * symptom_f1
         else:
             # 传统评分：仅基于诊断正确率
             total_score = diagnosis_score
@@ -645,7 +645,7 @@ def compute_diagnosis_score(
             result = {
                 "score": total_score,
                 "diagnosis_score": diagnosis_score,
-                "symptom_accuracy": symptom_accuracy,
+                "symptom_f1": symptom_f1,
                 "symptom_coverage": symptom_coverage,  # 保持向后兼容
                 "format_score": 1.0 if format_correct else 0.0,
                 "acc": is_correct,

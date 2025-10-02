@@ -16,13 +16,13 @@ from verl.trainer.ppo.reward import load_reward_manager
 from verl.utils.device import is_cuda_available
 
 # 导入DAPO Ray训练器
-from recipe.dapo.dapo_ray_trainer import RayDAPOTrainer
+from psy_r1.verl.trainer.dapo_ray_trainer import RayDAPOTrainer
 
 # 导入心理诊断奖励函数
-from psy_r1.verl.utils.dapo_reward_score_psy import register_psy_reward_function
+from psy_r1.verl.utils.dapo_reward_score_psy import register_psy_reward_function, create_dapo_psy_reward_fn
 
 
-@hydra.main(config_path="../../../recipe/dapo/config", config_name="dapo_trainer", version_base=None)
+@hydra.main(config_path="./config", config_name="dapo_trainer_psy", version_base=None)
 def main(config):
     run_ppo(config)
 
@@ -122,26 +122,45 @@ class TaskRunner:
             role_worker_mapping[Role.RefPolicy] = ray.remote(ActorRolloutRefWorker)
             mapping[Role.RefPolicy] = global_pool_id
 
-        # 创建专门的心理诊断奖励管理器
-        print("=== 初始化心理诊断奖励函数 ===")
-        reward_fn = create_psy_reward_manager(
-            config,
-            tokenizer,
-            0,  # num_examine for training
-            max_resp_len=config.data.max_response_length,
-            overlong_buffer_cfg=config.reward_model.overlong_buffer,
+        # 创建专门的心理诊断奖励函数（使用新的DAPO专用函数）
+        print("=== 初始化DAPO心理诊断奖励函数 ===")
+        
+        # 检查日志配置
+        show_train_examples = config.reward_model.get("show_training_examples", True)
+        show_val_examples = config.reward_model.get("show_validation_examples", True)
+        symptom_alpha = config.reward_model.get("symptom_alpha", 0.1)
+        
+        # 检查症状奖励配置
+        use_symptom_reward = config.reward_model.get("use_symptom_reward", False)
+        
+        print("是否开启症状奖励: ", use_symptom_reward)
+        
+        # 根据配置确定日志模式
+        train_log_mode = "train" if show_train_examples else None
+        val_log_mode = "val" if show_val_examples else None
+        
+        # 创建训练和验证的奖励函数
+        reward_fn = create_dapo_psy_reward_fn(
+            is_validation=train_log_mode, 
+            tokenizer=tokenizer, 
+            use_symptom_reward=use_symptom_reward, 
+            symptom_alpha=symptom_alpha
         )
-
-        # Note that we always use function-based RM for validation
-        val_reward_fn = create_psy_reward_manager(
-            config,
-            tokenizer,
-            1,  # num_examine for validation  
-            max_resp_len=config.data.max_response_length,
-            overlong_buffer_cfg=config.reward_model.overlong_buffer,
+        val_reward_fn = create_dapo_psy_reward_fn(
+            is_validation=val_log_mode, 
+            tokenizer=tokenizer, 
+            use_symptom_reward=use_symptom_reward, 
+            symptom_alpha=symptom_alpha
         )
         
-        print("=== 奖励函数初始化完成 ===")
+        # 打印配置状态
+        train_status = "开启日志" if show_train_examples else "关闭日志"
+        val_status = "开启日志" if show_val_examples else "关闭日志"
+        symptom_status = "启用症状奖励" if use_symptom_reward else "仅诊断奖励"
+        print(f"DAPO奖励函数配置 - 训练模式: {train_status}, 验证模式: {val_status}, 奖励模式: {symptom_status}")
+        print(f"症状奖励权重: {symptom_alpha}")
+        
+        print("=== DAPO奖励函数初始化完成 ===")
         
         resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
 
@@ -157,47 +176,6 @@ class TaskRunner:
         )
         trainer.init_workers()
         trainer.fit()
-
-
-def create_psy_reward_manager(config, tokenizer, num_examine, **reward_kwargs):
-    """
-    创建心理诊断专用的奖励管理器
-    """
-    from verl.workers.reward_manager import get_reward_manager_cls
-    
-    # 获取奖励管理器类
-    reward_manager_cls = get_reward_manager_cls(config.reward_model.reward_manager)
-    
-    # 检查是否启用症状奖励
-    use_symptom_reward = config.reward_model.get("use_symptom_reward", False)
-    symptom_alpha = config.reward_model.get("symptom_alpha", 0.1)
-    
-    print(f"使用心理诊断专用奖励函数: register_psy_reward_function")
-    print(f"症状奖励设置: use_symptom_reward={use_symptom_reward}, symptom_alpha={symptom_alpha}")
-    
-    # 创建包装函数，传递症状奖励参数
-    def psy_compute_score_wrapper(data_source, solution_str, ground_truth, extra_info=None, **kwargs):
-        return register_psy_reward_function(
-            data_source=data_source,
-            solution_str=solution_str,
-            ground_truth=ground_truth,
-            extra_info=extra_info,
-            use_symptom_reward=use_symptom_reward,
-            symptom_alpha=symptom_alpha,
-            **kwargs
-        )
-    
-    # 创建奖励管理器实例，使用我们的包装函数
-    reward_manager = reward_manager_cls(
-        tokenizer=tokenizer,
-        num_examine=num_examine,
-        compute_score=psy_compute_score_wrapper,
-        reward_fn_key=config.data.get("reward_fn_key", "data_source"),
-        **reward_kwargs,
-    )
-    
-    print(f"心理诊断奖励管理器初始化完成: {reward_manager_cls.__name__}")
-    return reward_manager
 
 
 if __name__ == "__main__":

@@ -21,6 +21,7 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
 MODEL_BASE_NAME="qwen3-8B"
+EXP_NAME=dapo_${MODEL_BASE_NAME}_reasoning_sft_ds-r1_v2_8_gpu
 
 # MODEL_PATH="/tcci_mnt/shihao/models/Qwen3-1.7B"
 # MODEL_BASE_NAME="qwen3-1.7B"
@@ -77,7 +78,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     trainer.critic_warmup=0.1 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name='SMHC_DAPO_diagnosis_with_reasoning' \
-    trainer.experiment_name=dapo_${MODEL_BASE_NAME}_reasoning_sft_ds-r1_v2_8_gpu \
+    trainer.experiment_name=${EXP_NAME} \
     trainer.n_gpus_per_node=${N_GPUS} \
     trainer.nnodes=1 \
     trainer.save_freq=50 \
@@ -85,4 +86,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     trainer.total_epochs=15 \
     trainer.val_before_train=True \
     ray_init.num_cpus=32 \
-    $@ 2>&1 | tee $LOG_DIR/dapo_${MODEL_BASE_NAME}_diagnosis_reasoning_direct_$NOW.log
+    reward_model.use_symptom_reward=True \
+    reward_model.show_training_examples=True \
+    reward_model.show_val_examples=True \
+    $@ 2>&1 | tee $LOG_DIR/${EXP_NAME}_$NOW.log

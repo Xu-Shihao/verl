@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
-# DAPO脚本 - 心理诊断任务
-# 基于GRPO脚本适配到DAPO算法，支持1个node的8卡运行
+# DAPO脚本 - 心理诊断任务 (不使用Ray版本，使用psy_r1模块)
+# 基于with-symptoms-acc-reward脚本，使用direct版本的启动方式
 set -xeuo pipefail
 
 # 设置环境proxy
 export https_proxy=http://10.119.16.227:7890 http_proxy=http://10.119.16.227:7890 all_proxy=socks5://10.119.16.227:7890
 
+# 设置WANDB
+export WANDB_API_KEY=d8e131b9817bc59353326755d6db8b705a4d8d4d
 wandb login --relogin $WANDB_API_KEY
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
@@ -22,9 +24,18 @@ NOW=$(date +%Y%m%d_%H%M%S)
 
 HOME="/mnt/tcci/shihao/project/verl"
 
+# 模型名称
+MODEL_PATH="/mnt/tcci/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
+MODEL_BASE_NAME="qwen3-8B"
+NNODES=1
+
 # 项目配置
-project_name='SMHC_diagnosis_with_reasoning_RL'
-exp_name='DAPO-qwen3_8B_reasoning_lora_sft_ds-r1_v2_8_gpu'
+project_name='SMHC_DAPO_diagnosis_with_reasoning'
+exp_name=dapo_${MODEL_BASE_NAME}_reasoning_sft_ds-r1_v2_8_gpu_with-symptoms-acc-reward
+
+# 确保不连接远程Ray集群
+unset RAY_ADDRESS
+export RAY_DISABLE_IMPORT_WARNING=1
 
 # 算法配置
 adv_estimator=grpo
@@ -71,27 +82,26 @@ top_p=1.0
 top_k=-1
 entropy_coeff=0
 
-# Ray配置
-RAY_ADDRESS=${RAY_ADDRESS:-"http://localhost:8265"}
-WORKING_DIR=${WORKING_DIR:-"${HOME}"}
-RUNTIME_ENV=${RUNTIME_ENV:-"${HOME}/recipe/dapo/runtime_env.yaml"}
-NNODES=${NNODES:-1}
-
 # 路径配置
-MODEL_PATH="/mnt/tcci/shihao/outputs/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
-CKPTS_DIR="/mnt/tcci/shihao/project/verl/psy_r1/ckpts/${project_name}/${exp_name}"
+CKPTS_DIR="/mnt/tcci/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
 TRAIN_FILE="$HOME/psy_r1/SMHC_data_v4/train.parquet"
 VAL_FILE="$HOME/psy_r1/SMHC_data_v4/val.parquet"
+
+# 症状奖励参数
+USE_SYMPTOM_REWARD=True
+SYMPTOM_ALPHA=0.1
 
 # 创建检查点目录
 mkdir -p "${CKPTS_DIR}"
 
-# 启动DAPO训练
-ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
-    --working-dir "${WORKING_DIR}" \
-    -- python3 -m recipe.dapo.main_dapo \
+# 切换到工作目录
+cd "${HOME}"
+
+# 启动DAPO训练 (使用psy_r1模块，不使用Ray)
+HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
+    data.reward_fn_key=data_source \
     data.train_batch_size=${train_prompt_bsz} \
     data.gen_batch_size=${gen_prompt_bsz} \
     data.max_prompt_length=${max_prompt_length} \
@@ -155,6 +165,10 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     reward_model.overlong_buffer.enable=${enable_overlong_buffer} \
     reward_model.overlong_buffer.len=${overlong_buffer_len} \
     reward_model.overlong_buffer.penalty_factor=${overlong_penalty_factor} \
+    reward_model.use_symptom_reward=$USE_SYMPTOM_REWARD \
+    +reward_model.symptom_alpha=$SYMPTOM_ALPHA \
+    reward_model.show_training_examples=True \
+    reward_model.show_val_examples=True \
     trainer.critic_warmup=0.1 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name="${project_name}" \
@@ -166,5 +180,6 @@ ray job submit --no-wait --runtime-env="${RUNTIME_ENV}" \
     trainer.total_epochs=15 \
     trainer.val_before_train=False \
     trainer.default_local_dir="${CKPTS_DIR}" \
-    trainer.resume_mode=disable \
-    $@ 2>&1 | tee $LOG_DIR/dapo_qwen3_8B_diagnosis_reasoning_$NOW.log
+    trainer.resume_mode=auto \
+    ray_init.num_cpus=32 \
+    $@ 2>&1 | tee $LOG_DIR/${exp_name}_$NOW.log
