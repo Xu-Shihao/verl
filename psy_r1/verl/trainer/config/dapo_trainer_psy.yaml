@@ -1,9 +1,9 @@
 hydra:
   searchpath:
-    - file://verl/trainer/config
+    - file://psy_r1/verl/trainer/config
 
 defaults:
-  - ppo_trainer
+  - ppo_trainer_psy
   - _self_
 
 data:

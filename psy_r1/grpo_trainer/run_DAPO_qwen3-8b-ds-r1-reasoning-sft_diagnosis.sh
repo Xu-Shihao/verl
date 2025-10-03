@@ -16,21 +16,21 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 set -x
 
 # 创建日志路径
-LOG_DIR="/mnt/tcci/shihao/project/verl/psy_r1/logs"
+LOG_DIR="/tcci_mnt/shihao/project/verl/psy_r1/logs"
 mkdir -p $LOG_DIR
 
 # 读取现在时间
 NOW=$(date +%Y%m%d_%H%M%S)
 
-HOME="/mnt/tcci/shihao/project/verl"
+HOME="/tcci_mnt/shihao/project/verl"
 
 # 模型名称
-MODEL_PATH="/mnt/tcci/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2"
 MODEL_BASE_NAME="qwen3-8B"
 NNODES=1
 
 # 项目配置
-project_name='SMHC_DAPO_diagnosis_with_reasoning'
+project_name='SMHC_diagnosis_with_reasoning_RL'
 exp_name=dapo_${MODEL_BASE_NAME}_reasoning_sft_ds-r1_v2_8_gpu
 
 # 确保不连接远程Ray集群
@@ -83,7 +83,7 @@ top_k=-1
 entropy_coeff=0
 
 # 路径配置
-CKPTS_DIR="/mnt/tcci/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
+CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
 TRAIN_FILE="$HOME/psy_r1/SMHC_data_v4/train.parquet"
 VAL_FILE="$HOME/psy_r1/SMHC_data_v4/val.parquet"
 
@@ -113,7 +113,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
     actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.optim.lr_warmup_steps=10 \
-    actor_rollout_ref.actor.optim.weight_decay=0.1 \
+    actor_rollout_ref.actor.optim.weight_decay=0.01 \
     actor_rollout_ref.actor.ppo_mini_batch_size=${train_prompt_mini_bsz} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${train_micro_batch_size} \
     actor_rollout_ref.actor.use_kl_loss=${use_kl_loss} \
@@ -177,8 +177,8 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=50 \
     trainer.test_freq=10 \
-    trainer.total_epochs=15 \
-    trainer.val_before_train=False \
+    trainer.total_epochs=30 \
+    trainer.val_before_train=True \
     trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=auto \
     ray_init.num_cpus=32 \

@@ -30,7 +30,7 @@ MODEL_BASE_NAME="qwen3-8B"
 NNODES=1
 
 # 项目配置
-project_name='SMHC_DAPO_diagnosis_with_reasoning'
+project_name='SMHC_diagnosis_with_reasoning_RL'
 exp_name=dapo_${MODEL_BASE_NAME}_reasoning_sft_ds-r1_v2_8_gpu_with-symptoms-acc-reward
 
 # 确保不连接远程Ray集群
