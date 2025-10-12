@@ -127,7 +127,7 @@ class TaskRunner:
         
         # 检查日志配置
         show_train_examples = config.reward_model.get("show_training_examples", True)
-        show_val_examples = config.reward_model.get("show_validation_examples", True)
+        show_val_examples = config.reward_model.get("show_val_examples", True)
         symptom_alpha = config.reward_model.get("symptom_alpha", 0.1)
         
         # 检查症状奖励配置

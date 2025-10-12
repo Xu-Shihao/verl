@@ -61,7 +61,7 @@ overlong_penalty_factor=1.0
 loss_agg_mode="token-mean"
 enable_filter_groups=True
 filter_groups_metric=acc
-max_num_gen_batches=10
+max_num_gen_batches=0
 train_prompt_bsz=128
 gen_prompt_bsz=$((train_prompt_bsz * 3))
 train_prompt_mini_bsz=32
@@ -84,8 +84,8 @@ entropy_coeff=0
 
 # 路径配置
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="$HOME/psy_r1/SMHC_data_v4/train.parquet"
-VAL_FILE="$HOME/psy_r1/SMHC_data_v4/val.parquet"
+TRAIN_FILE="$HOME/psy_r1/SMHC_data_v6/train.parquet"
+VAL_FILE="$HOME/psy_r1/SMHC_data_v6/val.parquet"
 
 # 症状奖励参数
 USE_SYMPTOM_REWARD=False
@@ -177,7 +177,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_dapo_psy \
     trainer.nnodes=${NNODES} \
     trainer.save_freq=50 \
     trainer.test_freq=10 \
-    trainer.total_epochs=30 \
+    trainer.total_epochs=20 \
     trainer.val_before_train=True \
     trainer.default_local_dir="${CKPTS_DIR}" \
     trainer.resume_mode=auto \

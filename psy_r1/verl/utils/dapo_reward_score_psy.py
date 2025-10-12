@@ -9,6 +9,7 @@ import sys
 import os
 import torch
 import numpy as np
+import random
 
 # 添加路径以便导入
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -92,6 +93,10 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
         batch_total_score = 0.0
         batch_symptom_coverage = 0.0  # 当前批次症状F1分数累计
         batch_symptom_samples = 0     # 当前批次有症状数据的样本数
+        
+        # 随机选择一个样本用于详细输出（每个批次都输出）
+        random_sample_idx = random.randint(0, batch_size - 1) if batch_size > 0 else 0
+        sample_details = []  # 存储所有样本的详细信息，用于随机输出
         
         # 计算有效响应长度（使用attention mask）
         attention_mask = data.batch.get("attention_mask", None)
@@ -344,6 +349,20 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             
             reward_scores.append(score)
             extra_info["reward"].append(score)
+            
+            # 收集样本详细信息用于随机输出
+            sample_info = {
+                'index': i,
+                'prompt_text': prompt_text,
+                'response_text': response_text,
+                'ground_truth': ground_truth,
+                'result': result,
+                'score': score,
+                'is_correct': is_correct,
+                'format_ok': format_ok,
+                'patient_id': patient_id
+            }
+            sample_details.append(sample_info)
         
         # 更新全局rollout统计（仅在训练模式且启用日志时）
         if is_validation == "train":
@@ -375,6 +394,63 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
                 print(f"Format Accuracy: {format_accuracy:.2f}%")
                 print(f"Total Score: {avg_total_score:.4f}")
                 print("-"*60 + "\n")
+        
+        # 每个批次都输出一个随机选择的样本详细信息（训练和验证都输出）
+        if is_validation is not None and sample_details:
+            random_sample = sample_details[random_sample_idx]
+            mode_str = "验证" if is_validation == "val" else "训练"
+            
+            print("\n" + "~"*80)
+            print(f"【随机样本详情 - {mode_str}阶段 - 样本 #{random_sample['index']+1}/{len(sample_details)}】")
+            print("~"*80)
+            
+            # 显示prompt（截断过长的内容）
+            prompt_display = random_sample['prompt_text']
+            # if len(prompt_display) > 200:
+            #     prompt_display = prompt_display[:200] + "..."
+            print(f"Prompt: \n{prompt_display}")
+            
+            # 显示response（截断过长的内容）
+            response_display = random_sample['response_text']
+            # if len(response_display) > 300:
+            #     response_display = response_display[:300] + "..."
+            print(f"Response: \n{response_display}")
+            
+            print(f"Ground Truth: {random_sample['ground_truth']}")
+            
+            # 显示详细指标
+            result = random_sample['result']
+            if isinstance(result, dict):
+                extracted = result.get('extracted_diagnosis', 'N/A')
+                diagnosis_score = result.get('diagnosis_score', 0.0)
+                symptom_f1 = result.get('symptom_f1', 0.0)
+                format_score = result.get('format_score', 0.0)
+                
+                print(f"Extracted Diagnosis: {extracted}")
+                print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
+                print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
+                print(f"Format Accuracy: {format_score:.3f}")
+                print(f"Total Score: {random_sample['score']:.3f}")
+                print(f"Is Correct: {random_sample['is_correct']}")
+                print(f"Format OK: {random_sample['format_ok']}")
+                
+                if random_sample['patient_id']:
+                    print(f"Patient ID: {random_sample['patient_id']}")
+                
+                # 显示症状confusion metrics（如果有）
+                if 'true_positive' in result:
+                    tp = result.get('true_positive', 0)
+                    fp = result.get('false_positive', 0)
+                    tn = result.get('true_negative', 0)
+                    fn = result.get('false_negative', 0)
+                    print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
+                
+                if 'error' in result:
+                    print(f"计算错误: {result['error']}")
+            else:
+                print(f"Score: {random_sample['score']:.3f}")
+            
+            print("~"*80 + "\n")
         
         # 转换为VERL期望的张量格式
         reward_tensor = torch.tensor(reward_scores, device=device, dtype=torch.float32)
