@@ -133,7 +133,11 @@ class TaskRunner:
         # 检查症状奖励配置
         use_symptom_reward = config.reward_model.get("use_symptom_reward", False)
         
+        # 检查ICD奖励配置
+        use_icd_reward = config.reward_model.get("use_icd_reward", False)
+        
         print("是否开启症状奖励: ", use_symptom_reward)
+        print("是否开启ICD奖励: ", use_icd_reward)
         
         # 根据配置确定日志模式
         train_log_mode = "train" if show_train_examples else None
@@ -144,21 +148,37 @@ class TaskRunner:
             is_validation=train_log_mode, 
             tokenizer=tokenizer, 
             use_symptom_reward=use_symptom_reward, 
-            symptom_alpha=symptom_alpha
+            symptom_alpha=symptom_alpha,
+            use_icd_reward=use_icd_reward
         )
         val_reward_fn = create_dapo_psy_reward_fn(
             is_validation=val_log_mode, 
             tokenizer=tokenizer, 
             use_symptom_reward=use_symptom_reward, 
-            symptom_alpha=symptom_alpha
+            symptom_alpha=symptom_alpha,
+            use_icd_reward=use_icd_reward
         )
         
         # 打印配置状态
         train_status = "开启日志" if show_train_examples else "关闭日志"
         val_status = "开启日志" if show_val_examples else "关闭日志"
-        symptom_status = "启用症状奖励" if use_symptom_reward else "仅诊断奖励"
-        print(f"DAPO奖励函数配置 - 训练模式: {train_status}, 验证模式: {val_status}, 奖励模式: {symptom_status}")
-        print(f"症状奖励权重: {symptom_alpha}")
+        
+        # 确定奖励模式
+        if use_icd_reward and use_symptom_reward:
+            reward_mode = "ICD+症状组合奖励"
+        elif use_icd_reward:
+            reward_mode = "纯ICD奖励"
+        elif use_symptom_reward:
+            reward_mode = "心理诊断+症状奖励"
+        else:
+            reward_mode = "纯心理诊断奖励"
+        
+        print(f"DAPO奖励函数配置 - 训练模式: {train_status}, 验证模式: {val_status}")
+        print(f"奖励模式: {reward_mode}")
+        if use_symptom_reward:
+            print(f"症状奖励权重: {symptom_alpha}")
+        if use_icd_reward:
+            print("ICD奖励计算公式: format_score * 0.2 + format_score * exact_match * 0.8")
         
         print("=== DAPO奖励函数初始化完成 ===")
         

@@ -10,6 +10,8 @@ import os
 import torch
 import numpy as np
 import random
+import re
+import pandas as pd
 
 # 添加路径以便导入
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -19,7 +21,283 @@ sys.path.append(current_dir)
 from psy_rewards import psy_reward_function
 
 
-def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, symptom_alpha=0.1):
+class ICD10Utils:
+    """ICD-10代码处理工具类"""
+    
+    # 定义11种允许的疾病大类
+    ALLOWED_DISEASES = {'F32', 'F41', 'F39', 'F51', 'F98', 'F42', 'F31', 'F43', 'F45', 'F20', 'Z71'}
+    
+    @staticmethod
+    def extract_major_class(code):
+        """
+        从ICD-10代码中提取大类
+        
+        Args:
+            code: ICD-10代码 (如 'F32.900', 'F41.100')
+            
+        Returns:
+            str: 大类代码 (如 'F32', 'F41') 或 None
+        """
+        if pd.isna(code) or code is None:
+            return None
+        
+        code_str = str(code).strip()
+        # 匹配F开头的代码或Z71
+        major_match = re.match(r'(F\d+|Z71)', code_str)
+        if major_match:
+            major_code = major_match.group(1)
+            # 只返回允许的疾病大类
+            return major_code if major_code in ICD10Utils.ALLOWED_DISEASES else None
+        return None
+    
+    @staticmethod
+    def extract_major_classes_from_list(diagnosis_codes):
+        """
+        从诊断代码列表中提取所有大类
+        
+        Args:
+            diagnosis_codes: 诊断代码列表或单个代码
+            
+        Returns:
+            list: 大类代码列表
+        """
+        # 首先检查是否为None或空值
+        if diagnosis_codes is None:
+            return []
+        
+        # 如果是列表，直接处理
+        if isinstance(diagnosis_codes, list):
+            if len(diagnosis_codes) == 0:
+                return []
+            diagnosis_list = diagnosis_codes
+        else:
+            # 对于非列表类型，检查是否为NaN
+            try:
+                if pd.isna(diagnosis_codes):
+                    return []
+            except (TypeError, ValueError):
+                # 如果pd.isna()失败，说明不是标准的NaN值
+                pass
+            
+            # 处理字符串格式的诊断代码
+            if isinstance(diagnosis_codes, str):
+                try:
+                    # 尝试解析为列表
+                    import ast
+                    diagnosis_list = ast.literal_eval(diagnosis_codes)
+                    if isinstance(diagnosis_list, list):
+                        diagnosis_list = diagnosis_list
+                    else:
+                        diagnosis_list = [diagnosis_codes]
+                except:
+                    diagnosis_list = [diagnosis_codes]
+            else:
+                diagnosis_list = [diagnosis_codes]
+        
+        # 提取所有大类
+        major_classes = []
+        for code in diagnosis_list:
+            major_class = ICD10Utils.extract_major_class(code)
+            if major_class and major_class not in major_classes:
+                major_classes.append(major_class)
+        
+        return major_classes
+
+
+def extract_recommendation_codes(response_text, debug=False):
+    """从响应文本中提取推荐的多个ICD-10大类代码（支持分号分隔格式）"""
+    if not response_text:
+        return []
+    
+    if debug:
+        print(f"ICD Recommendation响应文本: {response_text}")
+    
+    # 提取<box>标签内的内容
+    box_pattern = r'<box>(.*?)</box>'
+    box_matches = list(re.finditer(box_pattern, response_text, re.DOTALL))
+    
+    if not box_matches:
+        if debug:
+            print("未找到<box>标签")
+        return []
+    
+    # 使用最后一个匹配的<box>标签
+    predicted_text = box_matches[-1].group(1).strip()
+    
+    if debug:
+        print(f"提取的推荐代码文本: '{predicted_text}'")
+    
+    # 处理分号分隔的格式
+    recommended_codes = []
+    
+    # 首先尝试分号分隔的格式
+    if ';' in predicted_text:
+        # 按分号分割
+        parts = predicted_text.split(';')
+        for part in parts:
+            part = part.strip()
+            # 从每个部分提取ICD-10代码
+            icd10_matches = re.findall(r'F\d+|Z71', part)
+            recommended_codes.extend(icd10_matches)
+    else:
+        # 如果没有分号，尝试其他分隔符或按行分割
+        # 尝试逗号分隔
+        if ',' in predicted_text:
+            parts = predicted_text.split(',')
+            for part in parts:
+                part = part.strip()
+                icd10_matches = re.findall(r'F\d+|Z71', part)
+                recommended_codes.extend(icd10_matches)
+        else:
+            # 按行分割（兼容旧格式）
+            lines = predicted_text.split('\n')
+            for line in lines:
+                line = line.strip()
+                if line:
+                    icd10_matches = re.findall(r'F\d+|Z71', line)
+                    recommended_codes.extend(icd10_matches)
+    
+    # 如果上述方法都没有找到代码，直接在整个文本中搜索
+    if not recommended_codes:
+        icd10_matches = re.findall(r'F\d+|Z71', predicted_text)
+        recommended_codes.extend(icd10_matches)
+    
+    # 去重并保持顺序
+    final_codes = []
+    seen = set()
+    for code in recommended_codes:
+        if code not in seen:
+            final_codes.append(code)
+            seen.add(code)
+    
+    if debug:
+        print(f"提取的推荐代码列表: {final_codes}")
+        if ';' in predicted_text:
+            print("使用分号分隔格式解析")
+        elif ',' in predicted_text:
+            print("使用逗号分隔格式解析")
+        else:
+            print("使用行分隔格式解析")
+    
+    return final_codes
+
+
+def calculate_icd_reward(solution_str, ground_truth, extra_info=None, debug=False):
+    """
+    计算ICD代码推荐任务的奖励分数
+    
+    Args:
+        solution_str: 模型生成的响应文本
+        ground_truth: 真实的ICD代码（字符串或列表）
+        extra_info: 额外信息（暂未使用）
+        debug: 是否输出调试信息
+        
+    Returns:
+        dict: 包含各种指标的字典
+    """
+    try:
+        # 提取预测的ICD代码
+        predicted_codes = extract_recommendation_codes(solution_str, debug=debug)
+        
+        # 处理ground truth
+        if isinstance(ground_truth, str):
+            # 尝试解析字符串格式的ground truth
+            try:
+                import ast
+                gt_codes = ast.literal_eval(ground_truth)
+                if not isinstance(gt_codes, list):
+                    gt_codes = [ground_truth]
+            except:
+                gt_codes = [ground_truth]
+        elif isinstance(ground_truth, list):
+            gt_codes = ground_truth
+        else:
+            gt_codes = [str(ground_truth)] if ground_truth else []
+        
+        # 提取大类代码并过滤为允许的疾病
+        predicted_major_codes = ICD10Utils.extract_major_classes_from_list(predicted_codes)
+        gt_major_codes = ICD10Utils.extract_major_classes_from_list(gt_codes)
+        
+        if debug:
+            print(f"预测的大类代码: {predicted_major_codes}")
+            print(f"真实的大类代码: {gt_major_codes}")
+        
+        # 计算格式正确性（是否有<box>标签且提取到代码）
+        has_box_format = '<box>' in solution_str and '</box>' in solution_str
+        format_score = 1.0 if (has_box_format and len(predicted_codes) > 0) else 0.0
+        
+        # 计算exact match（集合完全匹配）
+        predicted_set = set(predicted_major_codes)
+        gt_set = set(gt_major_codes)
+        exact_match = 1.0 if predicted_set == gt_set else 0.0
+        
+        # 计算F1分数（用于更细粒度的评估）
+        if len(gt_set) == 0 and len(predicted_set) == 0:
+            # 都为空，完全正确
+            precision = 1.0
+            recall = 1.0
+            f1_score = 1.0
+        elif len(gt_set) == 0:
+            # 真实为空，但预测不为空
+            precision = 0.0
+            recall = 1.0  # 召回率定义为1（没有遗漏）
+            f1_score = 0.0
+        elif len(predicted_set) == 0:
+            # 预测为空，但真实不为空
+            precision = 1.0  # 精确率定义为1（没有错误预测）
+            recall = 0.0
+            f1_score = 0.0
+        else:
+            # 都不为空，正常计算
+            intersection = predicted_set.intersection(gt_set)
+            precision = len(intersection) / len(predicted_set)
+            recall = len(intersection) / len(gt_set)
+            f1_score = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+        
+        # 计算总分（新的计算方式：format_acc * 0.2 + format_acc * exact_match_acc * 0.8）
+        total_score = format_score * 0.2 + format_score * exact_match * 0.8
+        
+        result = {
+            "score": total_score,
+            "exact_match": exact_match,
+            "format_score": format_score,
+            "precision": precision,
+            "recall": recall,
+            "f1_score": f1_score,
+            "predicted_codes": predicted_codes,
+            "predicted_major_codes": predicted_major_codes,
+            "gt_codes": gt_codes,
+            "gt_major_codes": gt_major_codes,
+            "acc": exact_match > 0,  # 兼容性字段
+            "data_source": "icd_recommendation"
+        }
+        
+        if debug:
+            print(f"ICD奖励计算结果: {result}")
+        
+        return result
+        
+    except Exception as e:
+        if debug:
+            print(f"ICD奖励计算错误: {e}")
+        return {
+            "score": 0.0,
+            "exact_match": 0.0,
+            "format_score": 0.0,
+            "precision": 0.0,
+            "recall": 0.0,
+            "f1_score": 0.0,
+            "predicted_codes": [],
+            "predicted_major_codes": [],
+            "gt_codes": [],
+            "gt_major_codes": [],
+            "acc": False,
+            "error": str(e),
+            "data_source": "icd_recommendation"
+        }
+
+
+def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, symptom_alpha=0.1, use_icd_reward=False):
     """
     创建DAPO专用的心理诊断奖励函数，包含详细的rollout输出功能
     
@@ -28,6 +306,7 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
         tokenizer: 用于解码token的tokenizer
         use_symptom_reward: 是否启用症状识别奖励
         symptom_alpha: 症状F1分数在奖励函数中的权重
+        use_icd_reward: 是否启用ICD代码推荐奖励
     Returns:
         与VERL奖励管理器接口兼容的奖励函数
     """
@@ -45,6 +324,9 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
         'total_score': 0.0,
         'total_symptom_coverage': 0.0,  # 累计症状F1分数
         'symptom_samples': 0,  # 有症状数据的样本数
+        'total_icd_exact_match': 0.0,  # 累计ICD exact match分数
+        'total_icd_format_score': 0.0,  # 累计ICD格式分数
+        'icd_samples': 0,  # 有ICD数据的样本数
         'rollout_count': 0,
         'batch_count': 0
     }
@@ -84,7 +366,10 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             "diagnosis_accuracy": [],
             "symptom_accuracy": [],
             "format_accuracy": [],
-            "total_score": []
+            "total_score": [],
+            "icd_exact_match": [],
+            "icd_format_score": [],
+            "icd_f1_score": []
         }
         
         # 批次统计信息
@@ -93,6 +378,9 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
         batch_total_score = 0.0
         batch_symptom_coverage = 0.0  # 当前批次症状F1分数累计
         batch_symptom_samples = 0     # 当前批次有症状数据的样本数
+        batch_icd_exact_match = 0.0   # 当前批次ICD exact match累计
+        batch_icd_format_score = 0.0  # 当前批次ICD格式分数累计
+        batch_icd_samples = 0         # 当前批次有ICD数据的样本数
         
         # 随机选择一个样本用于详细输出（每个批次都输出）
         random_sample_idx = random.randint(0, batch_size - 1) if batch_size > 0 else 0
@@ -218,29 +506,82 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
                                 mode_str = "验证" if is_validation == "val" else "训练"
                                 print(f"[DEBUG DAPO {mode_str}] Error extracting patient_id: {e}")
                 
-                # 使用psy_reward_function（如果可用）
-                if psy_reward_function is not None:
-                    # 为psy_reward_function准备extra_info
-                    extra_info_for_reward = {"patient_id": patient_id} if patient_id else None
-                    result = psy_reward_function(
-                        data_source="psy_diagnosis",
-                        solution_str=response_text,
-                        ground_truth=ground_truth,
-                        extra_info=extra_info_for_reward,
-                        use_symptom_reward=use_symptom_reward,
-                        symptom_alpha=symptom_alpha,
-                        tracker=None  # 不传递tracker，避免个别样本记录，只在批次级别记录
-                    )
-                else:
-                    # 兜底到原始函数
-                    result = register_psy_reward_function(
-                        data_source="psy_diagnosis",
+                # 根据开关组合决定奖励计算方式
+                if use_icd_reward:
+                    # 计算ICD代码推荐奖励
+                    icd_result = calculate_icd_reward(
                         solution_str=response_text,
                         ground_truth=ground_truth,
                         extra_info={"patient_id": patient_id} if patient_id else None,
-                        use_symptom_reward=use_symptom_reward,
-                        symptom_alpha=symptom_alpha
+                        debug=(is_validation is not None and i == 0)
                     )
+                    
+                    if use_symptom_reward:
+                        # 同时启用症状奖励，需要获取症状F1分数
+                        if psy_reward_function is not None:
+                            # 为psy_reward_function准备extra_info
+                            extra_info_for_reward = {"patient_id": patient_id} if patient_id else None
+                            psy_result = psy_reward_function(
+                                data_source="psy_diagnosis",
+                                solution_str=response_text,
+                                ground_truth=ground_truth,
+                                extra_info=extra_info_for_reward,
+                                use_symptom_reward=True,
+                                symptom_alpha=symptom_alpha,
+                                tracker=None  # 不传递tracker，避免个别样本记录，只在批次级别记录
+                            )
+                        else:
+                            # 兜底到原始函数
+                            psy_result = register_psy_reward_function(
+                                data_source="psy_diagnosis",
+                                solution_str=response_text,
+                                ground_truth=ground_truth,
+                                extra_info={"patient_id": patient_id} if patient_id else None,
+                                use_symptom_reward=True,
+                                symptom_alpha=symptom_alpha
+                            )
+                        
+                        # 组合ICD奖励和症状奖励
+                        if isinstance(psy_result, dict):
+                            symptom_f1 = psy_result.get('symptom_f1', 0.0)
+                            # 将症状F1分数以symptom_alpha为系数加入ICD奖励中
+                            combined_score = icd_result.get("score", 0.0) + symptom_alpha * symptom_f1
+                            
+                            # 创建组合结果
+                            result = icd_result.copy()
+                            result["score"] = combined_score
+                            result["symptom_f1"] = symptom_f1
+                            result["icd_base_score"] = icd_result.get("score", 0.0)
+                            result["symptom_contribution"] = symptom_alpha * symptom_f1
+                        else:
+                            result = icd_result
+                    else:
+                        # 只使用ICD奖励
+                        result = icd_result
+                else:
+                    # 使用原有的心理诊断奖励
+                    if psy_reward_function is not None:
+                        # 为psy_reward_function准备extra_info
+                        extra_info_for_reward = {"patient_id": patient_id} if patient_id else None
+                        result = psy_reward_function(
+                            data_source="psy_diagnosis",
+                            solution_str=response_text,
+                            ground_truth=ground_truth,
+                            extra_info=extra_info_for_reward,
+                            use_symptom_reward=use_symptom_reward,
+                            symptom_alpha=symptom_alpha,
+                            tracker=None  # 不传递tracker，避免个别样本记录，只在批次级别记录
+                        )
+                    else:
+                        # 兜底到原始函数
+                        result = register_psy_reward_function(
+                            data_source="psy_diagnosis",
+                            solution_str=response_text,
+                            ground_truth=ground_truth,
+                            extra_info={"patient_id": patient_id} if patient_id else None,
+                            use_symptom_reward=use_symptom_reward,
+                            symptom_alpha=symptom_alpha
+                        )
                     
                 if isinstance(result, dict):
                     score = result.get("score", 0.0)
@@ -261,9 +602,18 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             
             # 收集验证阶段的详细指标（用于返回给_validate方法）
             if isinstance(result, dict):
-                psy_metrics["diagnosis_accuracy"].append(result.get("diagnosis_score", 0.0))
-                psy_metrics["symptom_accuracy"].append(result.get("symptom_f1", 0.0))
-                psy_metrics["format_accuracy"].append(result.get("format_score", 0.0))
+                if use_icd_reward:
+                    # ICD奖励模式的指标
+                    psy_metrics["icd_exact_match"].append(result.get("exact_match", 0.0))
+                    psy_metrics["icd_format_score"].append(result.get("format_score", 0.0))
+                    psy_metrics["icd_f1_score"].append(result.get("f1_score", 0.0))
+                    psy_metrics["diagnosis_accuracy"].append(result.get("exact_match", 0.0))  # 兼容性
+                    psy_metrics["format_accuracy"].append(result.get("format_score", 0.0))
+                else:
+                    # 原有心理诊断奖励模式的指标
+                    psy_metrics["diagnosis_accuracy"].append(result.get("diagnosis_score", 0.0))
+                    psy_metrics["symptom_accuracy"].append(result.get("symptom_f1", 0.0))
+                    psy_metrics["format_accuracy"].append(result.get("format_score", 0.0))
                 psy_metrics["total_score"].append(score)
             
             # 更新批次统计
@@ -275,38 +625,71 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             
             # 更新症状统计（始终计算，不管是否启用症状奖励）
             if isinstance(result, dict):
-                symptom_f1 = result.get('symptom_f1', 0.0)
-                # 只有当有有效的症状数据时才统计（避免None或错误情况）
-                if 'error' not in result and patient_id is not None:
-                    batch_symptom_coverage += symptom_f1  # 使用F1分数累计
-                    batch_symptom_samples += 1
+                if use_icd_reward:
+                    # 更新ICD统计
+                    if 'error' not in result:
+                        batch_icd_exact_match += result.get('exact_match', 0.0)
+                        batch_icd_format_score += result.get('format_score', 0.0)
+                        batch_icd_samples += 1
+                else:
+                    # 更新症状统计
+                    symptom_f1 = result.get('symptom_f1', 0.0)
+                    # 只有当有有效的症状数据时才统计（避免None或错误情况）
+                    if 'error' not in result and patient_id is not None:
+                        batch_symptom_coverage += symptom_f1  # 使用F1分数累计
+                        batch_symptom_samples += 1
             
             # 打印验证示例（第一个样本）
             if is_validation == "val" and not printed_validation_example[0] and i == 0:
                 print("\n" + "="*80)
-                print("【DAPO验证阶段奖励计算示例】")
+                if use_icd_reward and use_symptom_reward:
+                    print("【DAPO验证阶段ICD+症状组合奖励计算示例】")
+                elif use_icd_reward:
+                    print("【DAPO验证阶段ICD奖励计算示例】")
+                else:
+                    print("【DAPO验证阶段奖励计算示例】")
                 print("="*80)
                 
                 if isinstance(result, dict):
-                    extracted = result.get('extracted_diagnosis', 'N/A')
-                    diagnosis_score = result.get('diagnosis_score', 0.0)
-                    symptom_f1 = result.get('symptom_f1', 0.0)
-                    format_score = result.get('format_score', 0.0)
-                    
-                    print(f"提取的诊断: {extracted}")
-                    print(f"Ground Truth诊断: {ground_truth}")
-                    print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
-                    print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
-                    print(f"Format Accuracy: {format_score:.3f}")
-                    print(f"Total Score: {score:.3f}")
-                    
-                    # 显示症状confusion metrics（一行显示）
-                    if 'true_positive' in result:
-                        tp = result.get('true_positive', 0)
-                        fp = result.get('false_positive', 0)
-                        tn = result.get('true_negative', 0)
-                        fn = result.get('false_negative', 0)
-                        print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
+                    if use_icd_reward:
+                        # ICD奖励模式的显示
+                        predicted_codes = result.get('predicted_codes', [])
+                        predicted_major_codes = result.get('predicted_major_codes', [])
+                        gt_codes = result.get('gt_codes', [])
+                        gt_major_codes = result.get('gt_major_codes', [])
+                        exact_match = result.get('exact_match', 0.0)
+                        format_score = result.get('format_score', 0.0)
+                        f1_score = result.get('f1_score', 0.0)
+                        
+                        print(f"预测的ICD代码: {predicted_codes}")
+                        print(f"预测的大类代码: {predicted_major_codes}")
+                        print(f"Ground Truth代码: {gt_codes}")
+                        print(f"Ground Truth大类: {gt_major_codes}")
+                        print(f"Exact Match: {exact_match:.3f}")
+                        print(f"Format Score: {format_score:.3f}")
+                        print(f"F1 Score: {f1_score:.3f}")
+                        print(f"Total Score: {score:.3f}")
+                    else:
+                        # 原有心理诊断奖励模式的显示
+                        extracted = result.get('extracted_diagnosis', 'N/A')
+                        diagnosis_score = result.get('diagnosis_score', 0.0)
+                        symptom_f1 = result.get('symptom_f1', 0.0)
+                        format_score = result.get('format_score', 0.0)
+                        
+                        print(f"提取的诊断: {extracted}")
+                        print(f"Ground Truth诊断: {ground_truth}")
+                        print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
+                        print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
+                        print(f"Format Accuracy: {format_score:.3f}")
+                        print(f"Total Score: {score:.3f}")
+                        
+                        # 显示症状confusion metrics（一行显示）
+                        if 'true_positive' in result:
+                            tp = result.get('true_positive', 0)
+                            fp = result.get('false_positive', 0)
+                            tn = result.get('true_negative', 0)
+                            fn = result.get('false_negative', 0)
+                            print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
                     
                     if 'error' in result:
                         print(f"计算错误: {result['error']}")
@@ -317,29 +700,52 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             # 打印训练示例（第一个样本）
             elif is_validation == "train" and not printed_training_example[0] and i == 0:
                 print("\n" + "="*80)
-                print("【DAPO训练阶段奖励计算示例】")
+                if use_icd_reward:
+                    print("【DAPO训练阶段ICD奖励计算示例】")
+                else:
+                    print("【DAPO训练阶段奖励计算示例】")
                 print("="*80)
                 
                 if isinstance(result, dict):
-                    extracted = result.get('extracted_diagnosis', 'N/A')
-                    diagnosis_score = result.get('diagnosis_score', 0.0)
-                    symptom_f1 = result.get('symptom_f1', 0.0)
-                    format_score = result.get('format_score', 0.0)
-                    
-                    print(f"提取的诊断: {extracted}")
-                    print(f"Ground Truth诊断: {ground_truth}")
-                    print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
-                    print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
-                    print(f"Format Accuracy: {format_score:.3f}")
-                    print(f"Total Score: {score:.3f}")
-                    
-                    # 显示症状confusion metrics（一行显示）
-                    if 'true_positive' in result:
-                        tp = result.get('true_positive', 0)
-                        fp = result.get('false_positive', 0)
-                        tn = result.get('true_negative', 0)
-                        fn = result.get('false_negative', 0)
-                        print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
+                    if use_icd_reward:
+                        # ICD奖励模式的显示
+                        predicted_codes = result.get('predicted_codes', [])
+                        predicted_major_codes = result.get('predicted_major_codes', [])
+                        gt_codes = result.get('gt_codes', [])
+                        gt_major_codes = result.get('gt_major_codes', [])
+                        exact_match = result.get('exact_match', 0.0)
+                        format_score = result.get('format_score', 0.0)
+                        f1_score = result.get('f1_score', 0.0)
+                        
+                        print(f"预测的ICD代码: {predicted_codes}")
+                        print(f"预测的大类代码: {predicted_major_codes}")
+                        print(f"Ground Truth代码: {gt_codes}")
+                        print(f"Ground Truth大类: {gt_major_codes}")
+                        print(f"Exact Match: {exact_match:.3f}")
+                        print(f"Format Score: {format_score:.3f}")
+                        print(f"F1 Score: {f1_score:.3f}")
+                        print(f"Total Score: {score:.3f}")
+                    else:
+                        # 原有心理诊断奖励模式的显示
+                        extracted = result.get('extracted_diagnosis', 'N/A')
+                        diagnosis_score = result.get('diagnosis_score', 0.0)
+                        symptom_f1 = result.get('symptom_f1', 0.0)
+                        format_score = result.get('format_score', 0.0)
+                        
+                        print(f"提取的诊断: {extracted}")
+                        print(f"Ground Truth诊断: {ground_truth}")
+                        print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
+                        print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
+                        print(f"Format Accuracy: {format_score:.3f}")
+                        print(f"Total Score: {score:.3f}")
+                        
+                        # 显示症状confusion metrics（一行显示）
+                        if 'true_positive' in result:
+                            tp = result.get('true_positive', 0)
+                            fp = result.get('false_positive', 0)
+                            tn = result.get('true_negative', 0)
+                            fn = result.get('false_negative', 0)
+                            print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
                     
                     if 'error' in result:
                         print(f"计算错误: {result['error']}")
@@ -372,6 +778,9 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             rollout_stats['total_score'] += batch_total_score
             rollout_stats['total_symptom_coverage'] += batch_symptom_coverage
             rollout_stats['symptom_samples'] += batch_symptom_samples
+            rollout_stats['total_icd_exact_match'] += batch_icd_exact_match
+            rollout_stats['total_icd_format_score'] += batch_icd_format_score
+            rollout_stats['icd_samples'] += batch_icd_samples
             rollout_stats['batch_count'] += 1
             rollout_stats['rollout_count'] += 1
             
@@ -381,18 +790,34 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
                 format_accuracy = rollout_stats['format_correct_samples'] / rollout_stats['total_samples'] * 100
                 avg_total_score = rollout_stats['total_score'] / rollout_stats['total_samples']
                 
-                # 计算症状F1分数
-                symptom_accuracy = 0.0
-                if rollout_stats['symptom_samples'] > 0:
-                    symptom_accuracy = rollout_stats['total_symptom_coverage'] / rollout_stats['symptom_samples'] * 100
-                
                 print("\n" + "-"*60)
-                print(f"【DAPO Rollout 统计 - Batch {rollout_stats['batch_count']}】")
-                print(f"样本数: {rollout_stats['total_samples']}")
-                print(f"Diagnosis Accuracy (F1): {diagnosis_accuracy:.2f}%")
-                print(f"Symptom Accuracy (F1): {symptom_accuracy:.2f}%")
-                print(f"Format Accuracy: {format_accuracy:.2f}%")
-                print(f"Total Score: {avg_total_score:.4f}")
+                if use_icd_reward:
+                    print(f"【DAPO ICD Rollout 统计 - Batch {rollout_stats['batch_count']}】")
+                    print(f"样本数: {rollout_stats['total_samples']}")
+                    
+                    # 计算ICD统计
+                    icd_exact_match_accuracy = 0.0
+                    icd_format_accuracy = 0.0
+                    if rollout_stats['icd_samples'] > 0:
+                        icd_exact_match_accuracy = rollout_stats['total_icd_exact_match'] / rollout_stats['icd_samples'] * 100
+                        icd_format_accuracy = rollout_stats['total_icd_format_score'] / rollout_stats['icd_samples'] * 100
+                    
+                    print(f"ICD Exact Match: {icd_exact_match_accuracy:.2f}%")
+                    print(f"ICD Format Accuracy: {icd_format_accuracy:.2f}%")
+                    print(f"Total Score: {avg_total_score:.4f}")
+                else:
+                    print(f"【DAPO Rollout 统计 - Batch {rollout_stats['batch_count']}】")
+                    print(f"样本数: {rollout_stats['total_samples']}")
+                    print(f"Diagnosis Accuracy (F1): {diagnosis_accuracy:.2f}%")
+                    
+                    # 计算症状F1分数
+                    symptom_accuracy = 0.0
+                    if rollout_stats['symptom_samples'] > 0:
+                        symptom_accuracy = rollout_stats['total_symptom_coverage'] / rollout_stats['symptom_samples'] * 100
+                    
+                    print(f"Symptom Accuracy (F1): {symptom_accuracy:.2f}%")
+                    print(f"Format Accuracy: {format_accuracy:.2f}%")
+                    print(f"Total Score: {avg_total_score:.4f}")
                 print("-"*60 + "\n")
         
         # 每个批次都输出一个随机选择的样本详细信息（训练和验证都输出）
@@ -421,29 +846,55 @@ def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_re
             # 显示详细指标
             result = random_sample['result']
             if isinstance(result, dict):
-                extracted = result.get('extracted_diagnosis', 'N/A')
-                diagnosis_score = result.get('diagnosis_score', 0.0)
-                symptom_f1 = result.get('symptom_f1', 0.0)
-                format_score = result.get('format_score', 0.0)
-                
-                print(f"Extracted Diagnosis: {extracted}")
-                print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
-                print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
-                print(f"Format Accuracy: {format_score:.3f}")
-                print(f"Total Score: {random_sample['score']:.3f}")
-                print(f"Is Correct: {random_sample['is_correct']}")
-                print(f"Format OK: {random_sample['format_ok']}")
+                if use_icd_reward:
+                    # ICD奖励模式的详细显示
+                    predicted_codes = result.get('predicted_codes', [])
+                    predicted_major_codes = result.get('predicted_major_codes', [])
+                    gt_codes = result.get('gt_codes', [])
+                    gt_major_codes = result.get('gt_major_codes', [])
+                    exact_match = result.get('exact_match', 0.0)
+                    format_score = result.get('format_score', 0.0)
+                    f1_score = result.get('f1_score', 0.0)
+                    precision = result.get('precision', 0.0)
+                    recall = result.get('recall', 0.0)
+                    
+                    print(f"Predicted ICD Codes: {predicted_codes}")
+                    print(f"Predicted Major Codes: {predicted_major_codes}")
+                    print(f"Ground Truth Codes: {gt_codes}")
+                    print(f"Ground Truth Major: {gt_major_codes}")
+                    print(f"Exact Match: {exact_match:.3f}")
+                    print(f"Format Score: {format_score:.3f}")
+                    print(f"F1 Score: {f1_score:.3f}")
+                    print(f"Precision: {precision:.3f}")
+                    print(f"Recall: {recall:.3f}")
+                    print(f"Total Score: {random_sample['score']:.3f}")
+                    print(f"Is Correct: {random_sample['is_correct']}")
+                    print(f"Format OK: {random_sample['format_ok']}")
+                else:
+                    # 原有心理诊断奖励模式的详细显示
+                    extracted = result.get('extracted_diagnosis', 'N/A')
+                    diagnosis_score = result.get('diagnosis_score', 0.0)
+                    symptom_f1 = result.get('symptom_f1', 0.0)
+                    format_score = result.get('format_score', 0.0)
+                    
+                    print(f"Extracted Diagnosis: {extracted}")
+                    print(f"Diagnosis Accuracy (F1): {diagnosis_score:.3f}")
+                    print(f"Symptom Accuracy (F1): {symptom_f1:.3f}")
+                    print(f"Format Accuracy: {format_score:.3f}")
+                    print(f"Total Score: {random_sample['score']:.3f}")
+                    print(f"Is Correct: {random_sample['is_correct']}")
+                    print(f"Format OK: {random_sample['format_ok']}")
+                    
+                    # 显示症状confusion metrics（如果有）
+                    if 'true_positive' in result:
+                        tp = result.get('true_positive', 0)
+                        fp = result.get('false_positive', 0)
+                        tn = result.get('true_negative', 0)
+                        fn = result.get('false_negative', 0)
+                        print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
                 
                 if random_sample['patient_id']:
                     print(f"Patient ID: {random_sample['patient_id']}")
-                
-                # 显示症状confusion metrics（如果有）
-                if 'true_positive' in result:
-                    tp = result.get('true_positive', 0)
-                    fp = result.get('false_positive', 0)
-                    tn = result.get('true_negative', 0)
-                    fn = result.get('false_negative', 0)
-                    print(f"Symptom Confusion: TP={tp}, FP={fp}, TN={tn}, FN={fn}")
                 
                 if 'error' in result:
                     print(f"计算错误: {result['error']}")
@@ -601,4 +1052,62 @@ if __name__ == "__main__":
         print(f"  Symptom Coverage: {result.get('symptom_coverage', 0.0):.3f}")
         print(f"  Accuracy: {result.get('acc', False)}")
     
+    print("\n" + "="*60)
+    print("Testing ICD reward function...")
+    
+    # ICD奖励测试用例
+    icd_test_cases = [
+        {
+            "solution_str": "<think>患者表现出持续的情绪低落、兴趣减退、精力缺乏等症状，符合抑郁发作的诊断标准。</think><box>F32.1</box>",
+            "ground_truth": ["F32.1"],
+            "description": "完全匹配的ICD代码"
+        },
+        {
+            "solution_str": "<think>患者同时表现出抑郁和焦虑症状。</think><box>F32.1;F41.1</box>",
+            "ground_truth": ["F32.1", "F41.1"],
+            "description": "多个ICD代码完全匹配"
+        },
+        {
+            "solution_str": "<think>患者表现出抑郁症状。</think><box>F32.2</box>",
+            "ground_truth": ["F32.1"],
+            "description": "同大类但不同小类的ICD代码"
+        },
+        {
+            "solution_str": "<think>患者表现出焦虑症状。</think><box>F41.0</box>",
+            "ground_truth": ["F32.1"],
+            "description": "不同大类的ICD代码"
+        },
+        {
+            "solution_str": "患者表现出抑郁症状，诊断为F32.1",
+            "ground_truth": ["F32.1"],
+            "description": "缺少<box>标签的格式错误"
+        },
+        {
+            "solution_str": "<think>患者表现出抑郁和焦虑症状。</think><box>F32.1</box>",
+            "ground_truth": ["F32.1", "F41.1"],
+            "description": "预测不完整（遗漏部分诊断）"
+        }
+    ]
+    
+    for i, test_case in enumerate(icd_test_cases):
+        print(f"\nICD Test Case {i+1}: {test_case['description']}")
+        print(f"  Solution: {test_case['solution_str']}")
+        print(f"  Ground Truth: {test_case['ground_truth']}")
+        
+        result = calculate_icd_reward(
+            solution_str=test_case["solution_str"],
+            ground_truth=test_case["ground_truth"],
+            debug=True
+        )
+        
+        print(f"  Total Score: {result.get('score', 0.0):.3f}")
+        print(f"  Exact Match: {result.get('exact_match', 0.0):.3f}")
+        print(f"  Format Score: {result.get('format_score', 0.0):.3f}")
+        print(f"  F1 Score: {result.get('f1_score', 0.0):.3f}")
+        print(f"  Precision: {result.get('precision', 0.0):.3f}")
+        print(f"  Recall: {result.get('recall', 0.0):.3f}")
+        print(f"  Predicted Major Codes: {result.get('predicted_major_codes', [])}")
+        print(f"  GT Major Codes: {result.get('gt_major_codes', [])}")
+    
     print("\n✓ DAPO reward function testing completed!")
+    print("✓ ICD reward function testing completed!")
