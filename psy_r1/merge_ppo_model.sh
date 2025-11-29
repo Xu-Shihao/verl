@@ -1,4 +1,4 @@
 python ./scripts/legacy_model_merger.py merge --backend fsdp \
-    --hf_model_path '/tcci_mnt/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_v2' \
-    --local_dir '/tcci_mnt/shihao/project/verl/checkpoints/SMHC_diagnosis_with_reasoning_RL/dapo_qwen3-8B_reasoning_sft_ds-r1_v2_8_gpu/global_step_500/actor' \
-    --target_dir '/tcci_mnt/shihao/outputs/dataset_v1/qwen3-8B_auxiliary_diagnosis_full_sft_ds-r1_with_DAPO'
+    --hf_model_path '/mnt/tcci/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6' \
+    --local_dir '/mnt/tcci/shihao/project/verl/checkpoints/SMHC_ICD_recommendation_RL/grpo_qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7-1_lr1e-6_icd_recommendation_with_real_data/global_step_1750/actor' \
+    --target_dir '/mnt/tcci/shihao/outputs/dataset_v2/grpo_qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7-1_lr1e-6_with_ICD_recommendation_with_real_data'
