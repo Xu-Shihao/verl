@@ -67,8 +67,8 @@ entropy_coeff=0
 
 # 路径配置
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="$HOME/psy_r1/SMHC_data_v7/train.parquet"
-VAL_FILE="$HOME/psy_r1/SMHC_data_v7/val.parquet"
+TRAIN_FILE="$HOME/psy_r1/SMHC-MiroDiag_data_v7/train.parquet"
+VAL_FILE="$HOME/psy_r1/SMHC-MiroDiag_data_v7/val.parquet"
 
 # ICD奖励参数 - 启用ICD奖励（关键配置）
 USE_ICD_REWARD=True

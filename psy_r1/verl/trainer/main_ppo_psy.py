@@ -118,6 +118,7 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         # Initialize reward tensors
         reward_scores = []
         extra_info = {"reward": []}
+        rollout_reward_scores = data.non_tensor_batch.get("reward_scores", None)
         
         # 收集验证阶段的详细指标信息
         psy_metrics = {
@@ -154,6 +155,23 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
             valid_response_lengths = torch.full((batch_size,), responses.shape[1], device=responses.device)
         
         for i in range(batch_size):
+
+            # 读取 rollout 阶段的预计算奖励（来自 tool calc_reward）
+            precomputed_reward = None
+            if rollout_reward_scores is not None:
+                try:
+                    sample_reward = rollout_reward_scores[i]
+                    if isinstance(sample_reward, dict):
+                        for key in ["do_diagnose", "diagnose", "reward", "score"]:
+                            if key in sample_reward and sample_reward[key] is not None:
+                                precomputed_reward = sample_reward[key]
+                                break
+                    elif isinstance(sample_reward, (list, tuple)) and len(sample_reward) > 0:
+                        precomputed_reward = sample_reward[-1]
+                    elif isinstance(sample_reward, (float, int)):
+                        precomputed_reward = sample_reward
+                except Exception:
+                    precomputed_reward = None
             
             # Decode response to text (only valid part)
             if tokenizer:
@@ -335,6 +353,12 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                 result = {"score": 0.0, "error": str(e)}
                 is_correct = False
                 format_ok = False
+
+            # 使用工具预计算的奖励覆盖分数（若存在）
+            if precomputed_reward is not None:
+                score = float(precomputed_reward)
+                is_correct = bool(is_correct or score > 0.5)
+                format_ok = True
             
             # 收集验证阶段的详细指标（用于返回给_validate方法）
             if isinstance(result, dict):

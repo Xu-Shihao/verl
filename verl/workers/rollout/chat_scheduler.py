@@ -131,7 +131,22 @@ class ToolCompletionCallback(CompletionCallback):
                 f"done!"
             )
             return
+        
+        # 检查是否有工具请求终止对话（如 do_diagnose）
+        should_terminate = any(
+            isinstance(resp, dict) and resp.get("should_terminate", False)
+            for resp in tool_responses
+        )
+        
         messages.extend(tool_responses)
+
+        # 如果工具请求终止，不再继续对话
+        if should_terminate:
+            print(
+                f"[id={completions.id},turn={len(messages)},finish_reason={finish_reason}] Tool requested termination, "
+                f"done!"
+            )
+            return
 
         # STEP 3: resubmit completion request with tool responses
         self.scheduler.submit_chat_completions(messages=messages, request_id=completions.id, info=info)
@@ -143,19 +158,25 @@ class ToolCompletionCallback(CompletionCallback):
         tool = self.tools[tool_name]
 
         instance_id = await tool.create()
+        should_terminate = False
         try:
             tool_response, tool_reward_score, tool_metrics = await tool.execute(instance_id, tool_args)
+            # 检查工具是否要求终止对话
+            should_terminate = tool_metrics.get("should_terminate", False) if isinstance(tool_metrics, dict) else False
         except Exception as e:
             logger.exception(f"Error when executing tool: {e}")
             return e
         finally:
             await tool.release(instance_id)
 
-        return {
+        result = {
             "role": "tool",
             "content": tool_response,
             "tool_call_id": tool_call.id,
         }
+        if should_terminate:
+            result["should_terminate"] = True
+        return result
 
     def postprocess(self, batch: DataProto, batch_conversations: list[list[dict[str, str]]], n: int) -> DataProto:
         # NOTE: consistent with batch version of generate_sequences in vllm_rollout_spmd.py

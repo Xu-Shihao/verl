@@ -852,8 +852,19 @@ class SGLangRollout(BaseRollout):
                         ]
                     )
                     _req.add_tool_response_messages(self.processing_class, [resp for resp, _, _ in tool_call_results])
+                    
+                    # 检查是否有工具请求终止对话（如 do_diagnose）
+                    should_terminate = False
                     for tool_call, (resp, reward, metrics) in zip(parsed_tool_calls, tool_call_results, strict=True):
                         _req.update_metrics(metrics, tool_call.function.name)
+                        if isinstance(metrics, dict) and metrics.get("should_terminate", False):
+                            should_terminate = True
+                            logger.info(f"Tool {tool_call.function.name} requested termination")
+                    
+                    if should_terminate:
+                        finish_reason_type = FinishReasonTypeEnum.STOP
+                        _req.state = AsyncRolloutRequestStateEnum.COMPLETED
+                        break
                     if len(_req.input_ids) >= self.config.max_model_len:
                         finish_reason_type = FinishReasonTypeEnum.STOP
                         break
@@ -1046,6 +1057,89 @@ class SGLangRollout(BaseRollout):
         )
         return self._req_level_generate_sequences(prompts, **kwargs)
 
+    async def _dynamic_sampling_rollout(
+        self,
+        req_list: List[AsyncRolloutRequest],
+        target_count: int,
+        do_sample: bool,
+        is_validate: bool,
+        timeout: Optional[float] = None,
+        **kwargs,
+    ) -> List[AsyncRolloutRequest]:
+        """Dynamic sampling: start more rollouts than needed, return first target_count completed ones.
+        
+        This avoids bubble behavior where long trajectories delay the entire batch.
+        
+        Args:
+            req_list: List of rollout requests to process (may be more than target_count).
+            target_count: Number of completed rollouts needed.
+            do_sample: Whether to use sampling during generation.
+            is_validate: Whether this is a validation run.
+            timeout: Optional timeout in seconds; if None, wait for target_count to complete.
+            **kwargs: Additional arguments passed to _async_rollout_a_request.
+            
+        Returns:
+            List of completed AsyncRolloutRequest objects (length == target_count if enough complete).
+        """
+        completed_requests: List[AsyncRolloutRequest] = []
+        pending_tasks: dict[asyncio.Task, AsyncRolloutRequest] = {}
+        
+        # Create tasks for all requests
+        for req in req_list:
+            task = asyncio.create_task(self._async_rollout_a_request(req, do_sample, is_validate, **kwargs))
+            pending_tasks[task] = req
+        
+        try:
+            # Use asyncio.wait with FIRST_COMPLETED to get results as they finish
+            remaining_tasks = set(pending_tasks.keys())
+            
+            while len(completed_requests) < target_count and remaining_tasks:
+                # Wait for at least one task to complete
+                done, remaining_tasks = await asyncio.wait(
+                    remaining_tasks,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                
+                if not done and timeout is not None:
+                    # Timeout reached, break out
+                    logger.warning(
+                        f"Dynamic sampling timeout reached. Got {len(completed_requests)}/{target_count} samples."
+                    )
+                    break
+                
+                for task in done:
+                    try:
+                        result = task.result()
+                        if result.state == AsyncRolloutRequestStateEnum.COMPLETED:
+                            completed_requests.append(result)
+                            logger.info(
+                                f"Dynamic sampling: completed {len(completed_requests)}/{target_count}"
+                            )
+                            if len(completed_requests) >= target_count:
+                                break
+                    except Exception as e:
+                        logger.warning(f"Rollout task failed: {e}")
+                        continue
+                        
+        finally:
+            # Cancel remaining tasks that we don't need
+            for task in remaining_tasks:
+                if not task.done():
+                    task.cancel()
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+            
+            cancelled_count = len(remaining_tasks)
+            if cancelled_count > 0:
+                logger.info(f"Dynamic sampling: cancelled {cancelled_count} excess rollouts")
+        
+        return completed_requests[:target_count]
+
     @GPUMemoryLogger(role="sglang rollout", logger=logger)
     @torch.no_grad()
     def _req_level_generate_sequences(self, prompts: DataProto, **kwargs) -> DataProto:
@@ -1059,16 +1153,85 @@ class SGLangRollout(BaseRollout):
         do_sample = prompts.meta_info.get("do_sample", True)
         is_validate = prompts.meta_info.get("validate", False)
         tgt_device = prompts.batch["input_ids"].device
+        
+        # Check dynamic sampling configuration
+        dynamic_sampling_config = getattr(self.config.multi_turn, "dynamic_sampling", None)
+        dynamic_sampling_enabled = (
+            dynamic_sampling_config is not None 
+            and getattr(dynamic_sampling_config, "enable", False)
+        )
+        
         if self._tp_rank == 0:
             req_list = self._preprocess_prompt_to_async_rollout_requests(
                 prompts,
             )
             loop = asyncio.get_event_loop()
-            output_req_list = loop.run_until_complete(
-                asyncio.gather(
-                    *[self._async_rollout_a_request(req, do_sample, is_validate, **kwargs) for req in req_list],
+            
+            if dynamic_sampling_enabled and not is_validate:
+                # Dynamic sampling mode: oversample and use first completed ones
+                oversample_ratio = getattr(dynamic_sampling_config, "oversample_ratio", 1.2)
+                timeout = getattr(dynamic_sampling_config, "timeout", None)
+                target_count = len(req_list)
+                oversample_count = int(target_count * oversample_ratio)
+                
+                # Duplicate some requests to reach oversample_count
+                if oversample_count > target_count:
+                    # Create additional copies of requests (with new request_ids)
+                    extra_needed = oversample_count - target_count
+                    original_prompts_data = list(zip(
+                        prompts.non_tensor_batch.get("raw_prompt", []),
+                        prompts.non_tensor_batch.get("multi_modal_data", [None] * len(req_list)),
+                    ))
+                    
+                    for i in range(extra_needed):
+                        # Cycle through original prompts
+                        src_idx = i % target_count
+                        src_req = req_list[src_idx]
+                        # Create a copy with new request_id
+                        new_req = AsyncRolloutRequest(
+                            batch_data_id=src_req.batch_data_id,
+                            rollout_offset=target_count + i,  # Mark as extra rollout
+                            request_id=str(uuid4()),
+                            state=AsyncRolloutRequestStateEnum.PENDING,
+                            messages=deepcopy(src_req.messages),
+                            multi_modal_data=src_req.multi_modal_data,
+                            tool_schemas=src_req.tool_schemas,
+                            tools_kwargs=deepcopy(src_req.tools_kwargs) if src_req.tools_kwargs else {},
+                            interaction_kwargs=deepcopy(src_req.interaction_kwargs) if src_req.interaction_kwargs else {},
+                            input_ids=src_req.input_ids.clone() if src_req.input_ids is not None else None,
+                            response_ids=None,
+                            attention_mask=src_req.attention_mask.clone() if src_req.attention_mask is not None else None,
+                            response_attention_mask=None,
+                            response_position_ids=None,
+                            response_loss_mask=None,
+                            reward_scores={},
+                            max_prompt_len=src_req.max_prompt_len,
+                            max_response_len=src_req.max_response_len,
+                            max_model_len=src_req.max_model_len,
+                            use_inference_chat_template=src_req.use_inference_chat_template,
+                            tokenization_sanity_check_mode=src_req.tokenization_sanity_check_mode,
+                            processing_class=self.processing_class,
+                        )
+                        req_list.append(new_req)
+                    
+                    logger.info(
+                        f"Dynamic sampling: oversampling from {target_count} to {len(req_list)} requests "
+                        f"(ratio={oversample_ratio})"
+                    )
+                
+                output_req_list = loop.run_until_complete(
+                    self._dynamic_sampling_rollout(
+                        req_list, target_count, do_sample, is_validate, timeout, **kwargs
+                    )
                 )
-            )
+            else:
+                # Standard mode: wait for all requests
+                output_req_list = loop.run_until_complete(
+                    asyncio.gather(
+                        *[self._async_rollout_a_request(req, do_sample, is_validate, **kwargs) for req in req_list],
+                    )
+                )
+            
             sorted_output_req_list = sorted(output_req_list, key=lambda x: (x.batch_data_id, x.rollout_offset))
         else:
             sorted_output_req_list = None
@@ -1090,6 +1253,7 @@ class SGLangRollout(BaseRollout):
         reward_scores = []
         multi_modal_inputs = []
         request_ids = []
+        num_turns_list = []  # 记录每个请求的对话轮数
 
         for req in sorted_output_req_list:
             assert req.state == AsyncRolloutRequestStateEnum.COMPLETED, f"Request {req.request_id} is not completed"
@@ -1130,6 +1294,8 @@ class SGLangRollout(BaseRollout):
             reward_scores.append(req.reward_scores)
             multi_modal_inputs.append(req.multi_modal_inputs)
             request_ids.append(req.request_id)
+            # 计算对话轮数：消息列表长度即为对话轮数
+            num_turns_list.append(len(req.messages) if req.messages else 0)
 
         prompt_ids = pad_sequence(
             prompt_ids,
@@ -1224,6 +1390,7 @@ class SGLangRollout(BaseRollout):
                 "reward_scores": np.array(reward_scores),
                 "multi_modal_inputs": np.array(multi_modal_inputs, dtype=object),
                 "request_id": np.array(request_ids),
+                "__num_turns__": np.array(num_turns_list, dtype=np.int32),  # 对话轮数用于wandb记录
             },
         )
 

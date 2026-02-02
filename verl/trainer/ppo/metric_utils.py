@@ -449,35 +449,29 @@ def process_validation_metrics(
 
                 metric = {}
                 n_resps = len(numeric_vals)
-                metric[f"mean@{n_resps}"] = np.mean(numeric_vals)
+                # 移除 @{n_resps} 后缀，使不同运行的指标可以在wandb同一图上比较
+                metric["mean"] = np.mean(numeric_vals)
 
                 if n_resps > 1:
-                    metric[f"std@{n_resps}"] = np.std(numeric_vals)
+                    metric["std"] = np.std(numeric_vals)
 
-                    ns = []
-                    n = 2
-                    while n < n_resps:
-                        ns.append(n)
-                        n *= 2
-                    ns.append(n_resps)
-
-                    for n in ns:
-                        [(bon_mean, bon_std), (won_mean, won_std)] = bootstrap_metric(
-                            data=numeric_vals, subset_size=n, reduce_fns=[np.max, np.min], seed=seed
+                    # 只计算最大样本数的 best/worst 统计，不再按不同n值分别记录
+                    [(bon_mean, bon_std), (won_mean, won_std)] = bootstrap_metric(
+                        data=numeric_vals, subset_size=n_resps, reduce_fns=[np.max, np.min], seed=seed
+                    )
+                    metric["best/mean"], metric["best/std"] = bon_mean, bon_std
+                    metric["worst/mean"], metric["worst/std"] = won_mean, won_std
+                    if var2vals.get("pred", None) is not None:
+                        vote_data = [
+                            {"val": val, "pred": pred} for val, pred in zip(numeric_vals, var2vals["pred"], strict=True)
+                        ]
+                        [(maj_n_mean, maj_n_std)] = bootstrap_metric(
+                            data=vote_data,
+                            subset_size=n_resps,
+                            reduce_fns=[partial(calc_maj_val, vote_key="pred", val_key="val")],
+                            seed=seed,
                         )
-                        metric[f"best@{n}/mean"], metric[f"best@{n}/std"] = bon_mean, bon_std
-                        metric[f"worst@{n}/mean"], metric[f"worst@{n}/std"] = won_mean, won_std
-                        if var2vals.get("pred", None) is not None:
-                            vote_data = [
-                                {"val": val, "pred": pred} for val, pred in zip(numeric_vals, var2vals["pred"], strict=True)
-                            ]
-                            [(maj_n_mean, maj_n_std)] = bootstrap_metric(
-                                data=vote_data,
-                                subset_size=n,
-                                reduce_fns=[partial(calc_maj_val, vote_key="pred", val_key="val")],
-                                seed=seed,
-                            )
-                            metric[f"maj@{n}/mean"], metric[f"maj@{n}/std"] = maj_n_mean, maj_n_std
+                        metric["maj/mean"], metric["maj/std"] = maj_n_mean, maj_n_std
 
                 data_src2prompt2var2metric[data_source][prompt][var_name] = metric
 

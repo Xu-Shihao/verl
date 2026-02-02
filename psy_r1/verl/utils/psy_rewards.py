@@ -98,8 +98,8 @@ def load_symptom_data():
         _mapping_cache = None  # 不再需要映射关系
         _symptom_columns_cache = symptom_columns
         
-        print(f"[INFO] 成功加载症状数据: {symptom_df.shape[0]} 条记录, {len(symptom_columns)} 个症状")
-        print(f"[INFO] Patient ID列: patient_id, 症状列数: {len(symptom_columns)}")
+        # print(f"[INFO] 成功加载症状数据: {symptom_df.shape[0]} 条记录, {len(symptom_columns)} 个症状")
+        # print(f"[INFO] Patient ID列: patient_id, 症状列数: {len(symptom_columns)}")
         
         return symptom_df, _mapping_cache, symptom_columns
         

@@ -103,6 +103,12 @@ class ToolAgentLoop(AgentLoopBase):
             if any(isinstance(item, Exception) for item in tool_responses):
                 break
 
+            # 检查是否有工具请求终止对话（如 do_diagnose）
+            should_terminate = any(
+                isinstance(resp, dict) and resp.get("should_terminate", False)
+                for resp in tool_responses
+            )
+
             # append tool_response_ids
             tool_response_ids = await self.loop.run_in_executor(
                 None,
@@ -121,6 +127,11 @@ class ToolAgentLoop(AgentLoopBase):
             response_mask += [0] * len(tool_response_ids)
             user_turns += 1
 
+            # 如果工具请求终止对话，退出循环
+            if should_terminate:
+                logger.info("Tool requested termination, stopping agent loop.")
+                break
+
         response_ids = prompt_ids[-len(response_mask) :]
         prompt_ids = prompt_ids[: len(prompt_ids) - len(response_mask)]
 
@@ -134,8 +145,13 @@ class ToolAgentLoop(AgentLoopBase):
         return output
 
     async def _call_tool(self, tool_call: FunctionCall) -> dict[str, str]:
-        """Call tool and return tool response."""
+        """Call tool and return tool response.
+        
+        Returns:
+            dict with "role", "content", and optionally "should_terminate" keys.
+        """
         tool, instance_id = None, None
+        should_terminate = False
         try:
             # TODO: append malformed tool_call to the prompt: invalid function name or arguments
             tool_name = tool_call.name
@@ -143,7 +159,9 @@ class ToolAgentLoop(AgentLoopBase):
             tool = self.tools[tool_name]
 
             instance_id = await tool.create()
-            tool_response, _, _ = await tool.execute(instance_id, tool_args)
+            tool_response, _, tool_metrics = await tool.execute(instance_id, tool_args)
+            # 检查工具是否要求终止对话
+            should_terminate = tool_metrics.get("should_terminate", False) if isinstance(tool_metrics, dict) else False
         except Exception as e:
             logger.exception(f"Error when executing tool: {e}")
             return e
@@ -160,7 +178,10 @@ class ToolAgentLoop(AgentLoopBase):
                 length = self.max_tool_response_length // 2
                 tool_response = tool_response[:length] + "...(truncated)..." + tool_response[-length:]
 
-        return {
+        result = {
             "role": "tool",
             "content": tool_response,
         }
+        if should_terminate:
+            result["should_terminate"] = True
+        return result

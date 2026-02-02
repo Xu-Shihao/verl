@@ -226,8 +226,17 @@ def extract_psy_metrics(reward_extra_infos_dict: dict, prefix: str = "training")
     if not reward_extra_infos_dict:
         return psy_metrics
     
-    # Find all PSY-related keys
-    psy_keys = [key for key in reward_extra_infos_dict.keys() if key.startswith("psy_")]
+    # 只保留格式和诊断正确性的指标，其他指标不记录
+    # 这样可以减少 wandb 中的指标数量，方便比较不同运行
+    allowed_metrics = {
+        "psy_format_accuracy",      # 格式正确性
+        "psy_diagnosis_accuracy",   # 诊断正确性
+        "psy_icd_format_score",     # ICD 格式分数
+        "psy_icd_exact_match",      # ICD 完全匹配
+    }
+    
+    # Find PSY-related keys that are in the allowed list
+    psy_keys = [key for key in reward_extra_infos_dict.keys() if key in allowed_metrics]
     
     for psy_key in psy_keys:
         values = reward_extra_infos_dict[psy_key]
@@ -238,25 +247,14 @@ def extract_psy_metrics(reward_extra_infos_dict: dict, prefix: str = "training")
             # Remove the "psy_" prefix and create metric name
             metric_name = psy_key[4:]  # Remove "psy_" prefix
             
-            # Calculate statistics
-            if values_array.dtype in [np.float32, np.float64]:
-                # For numerical values, calculate mean, std, min, max
-                psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array))
-                psy_metrics[f"{prefix}/psy_{metric_name}_std"] = float(np.std(values_array))
-                psy_metrics[f"{prefix}/psy_{metric_name}_min"] = float(np.min(values_array))
-                psy_metrics[f"{prefix}/psy_{metric_name}_max"] = float(np.max(values_array))
-            elif values_array.dtype in [np.int32, np.int64]:
-                # For integer values, calculate mean, min, max
-                psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array))
-                psy_metrics[f"{prefix}/psy_{metric_name}_min"] = int(np.min(values_array))
-                psy_metrics[f"{prefix}/psy_{metric_name}_max"] = int(np.max(values_array))
-            else:
-                # For other types, just calculate mean if possible
-                try:
-                    psy_metrics[f"{prefix}/psy_{metric_name}_mean"] = float(np.mean(values_array.astype(float)))
-                except (ValueError, TypeError):
-                    # If conversion fails, just count the number of samples
-                    psy_metrics[f"{prefix}/psy_{metric_name}_count"] = len(values_array)
+            # 只计算 mean 和 std，不再计算 min/max
+            try:
+                values_float = values_array.astype(float)
+                psy_metrics[f"{prefix}/psy_{metric_name}/mean"] = float(np.mean(values_float))
+                psy_metrics[f"{prefix}/psy_{metric_name}/std"] = float(np.std(values_float))
+            except (ValueError, TypeError):
+                # If conversion fails, skip this metric
+                pass
     
     return psy_metrics
 
@@ -858,31 +856,36 @@ class RayPPOTrainer:
         data_src2var2metric2val = process_validation_metrics(data_sources, sample_inputs, reward_extra_infos_dict)
         metric_dict = {}
         
-        # Add PSY metrics to the metric dictionary
+        # Add PSY metrics to the metric dictionary (只有格式和诊断正确性的 mean/std)
         if psy_val_metrics:
             metric_dict.update(psy_val_metrics)
-            print(f"[INFO] Added {len(psy_val_metrics)} PSY validation metrics: {list(psy_val_metrics.keys())}")
+
+        # 只保留核心指标 (reward 的 mean 和 best/mean)，简化 val-aux 指标数量
+        # val-aux 只保留 reward 的 std 和 mean 用于监控
+        allowed_val_aux_metrics = {"std", "mean"}
         
         for data_source, var2metric2val in data_src2var2metric2val.items():
             core_var = "acc" if "acc" in var2metric2val else "reward"
             for var_name, metric2val in var2metric2val.items():
-                n_max = max([int(name.split("@")[-1].split("/")[0]) for name in metric2val.keys()])
                 for metric_name, metric_val in metric2val.items():
+                    # 核心指标：reward 的 mean, maj/mean, best/mean
                     if (
                         (var_name == core_var)
-                        and any(metric_name.startswith(pfx) for pfx in ["mean", "maj", "best"])
-                        and (f"@{n_max}" in metric_name)
+                        and metric_name in ["mean", "maj/mean", "best/mean"]
                     ):
                         metric_sec = "val-core"
-                    else:
+                        pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
+                        metric_dict[pfx] = metric_val
+                    # val-aux: 只保留核心变量的 std 和 mean，其他指标不记录
+                    elif (var_name == core_var) and metric_name in allowed_val_aux_metrics:
                         metric_sec = "val-aux"
-                    pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
-                    metric_dict[pfx] = metric_val
+                        pfx = f"{metric_sec}/{data_source}/{var_name}/{metric_name}"
+                        metric_dict[pfx] = metric_val
+                    # 其他指标不记录，以简化 wandb 图表
 
+        # 只保留 num_turns 的 mean
         if len(sample_turns) > 0:
             sample_turns = np.concatenate(sample_turns)
-            metric_dict["val-aux/num_turns/min"] = sample_turns.min()
-            metric_dict["val-aux/num_turns/max"] = sample_turns.max()
             metric_dict["val-aux/num_turns/mean"] = sample_turns.mean()
 
         return metric_dict
@@ -1311,7 +1314,7 @@ class RayPPOTrainer:
                                 psy_metrics = extract_psy_metrics(reward_extra_infos_dict, prefix="training")
                                 if psy_metrics:
                                     metrics.update(psy_metrics)
-                                    print(f"[INFO] Added {len(psy_metrics)} PSY training metrics (non-async): {list(psy_metrics.keys())}")
+                                    # print(f"[INFO] Added {len(psy_metrics)} PSY training metrics (non-async): {list(psy_metrics.keys())}")
 
                     # recompute old_log_probs
                     with marked_timer("old_log_prob", timing_raw, color="blue"):
@@ -1383,7 +1386,7 @@ class RayPPOTrainer:
                             psy_metrics = extract_psy_metrics(reward_extra_infos_dict, prefix="training")
                             if psy_metrics:
                                 metrics.update(psy_metrics)
-                                print(f"[INFO] Added {len(psy_metrics)} PSY training metrics: {list(psy_metrics.keys())}")
+                                # print(f"[INFO] Added {len(psy_metrics)} PSY training metrics: {list(psy_metrics.keys())}")
 
                         # compute rewards. apply_kl_penalty if available
                         if self.config.algorithm.use_kl_in_reward:
