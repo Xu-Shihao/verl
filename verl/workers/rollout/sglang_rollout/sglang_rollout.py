@@ -1089,54 +1089,52 @@ class SGLangRollout(BaseRollout):
             task = asyncio.create_task(self._async_rollout_a_request(req, do_sample, is_validate, **kwargs))
             pending_tasks[task] = req
         
-        try:
-            # Use asyncio.wait with FIRST_COMPLETED to get results as they finish
-            remaining_tasks = set(pending_tasks.keys())
+        # Use asyncio.wait with FIRST_COMPLETED to get results as they finish
+        remaining_tasks = set(pending_tasks.keys())
+        
+        while len(completed_requests) < target_count and remaining_tasks:
+            # Wait for at least one task to complete
+            done, remaining_tasks = await asyncio.wait(
+                remaining_tasks,
+                timeout=timeout,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
             
-            while len(completed_requests) < target_count and remaining_tasks:
-                # Wait for at least one task to complete
-                done, remaining_tasks = await asyncio.wait(
-                    remaining_tasks,
-                    timeout=timeout,
-                    return_when=asyncio.FIRST_COMPLETED,
+            if not done and timeout is not None:
+                # Timeout reached, break out
+                logger.warning(
+                    f"Dynamic sampling timeout reached. Got {len(completed_requests)}/{target_count} samples."
                 )
-                
-                if not done and timeout is not None:
-                    # Timeout reached, break out
-                    logger.warning(
-                        f"Dynamic sampling timeout reached. Got {len(completed_requests)}/{target_count} samples."
-                    )
-                    break
-                
-                for task in done:
-                    try:
-                        result = task.result()
-                        if result.state == AsyncRolloutRequestStateEnum.COMPLETED:
-                            completed_requests.append(result)
-                            logger.info(
-                                f"Dynamic sampling: completed {len(completed_requests)}/{target_count}"
-                            )
-                            if len(completed_requests) >= target_count:
-                                break
-                    except Exception as e:
-                        logger.warning(f"Rollout task failed: {e}")
-                        continue
-                        
-        finally:
-            # Cancel remaining tasks that we don't need
-            for task in remaining_tasks:
-                if not task.done():
-                    task.cancel()
-                    try:
-                        await task
-                    except asyncio.CancelledError:
-                        pass
-                    except Exception:
-                        pass
+                break
             
-            cancelled_count = len(remaining_tasks)
-            if cancelled_count > 0:
-                logger.info(f"Dynamic sampling: cancelled {cancelled_count} excess rollouts")
+            for task in done:
+                try:
+                    result = task.result()
+                    if result.state == AsyncRolloutRequestStateEnum.COMPLETED:
+                        completed_requests.append(result)
+                        logger.info(
+                            f"Dynamic sampling: completed {len(completed_requests)}/{target_count}"
+                        )
+                        if len(completed_requests) >= target_count:
+                            break
+                except Exception as e:
+                    logger.warning(f"Rollout task failed: {e}")
+                    continue
+        
+        # NOTE: We do NOT cancel remaining tasks to avoid CUDA memory access errors.
+        # SGLang async tasks use CUDA resources that cannot be safely cancelled.
+        # Instead, we let them complete in the background and just ignore their results.
+        if remaining_tasks:
+            logger.info(
+                f"Dynamic sampling: got {len(completed_requests)} samples, "
+                f"letting {len(remaining_tasks)} excess rollouts complete in background"
+            )
+            # Wait for all remaining tasks to complete to avoid CUDA issues
+            # but don't use their results
+            try:
+                await asyncio.gather(*remaining_tasks, return_exceptions=True)
+            except Exception:
+                pass
         
         return completed_requests[:target_count]
 

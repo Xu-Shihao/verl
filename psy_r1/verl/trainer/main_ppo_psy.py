@@ -411,6 +411,27 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                     print("【验证阶段奖励计算示例】")
                 print("="*80)
                 
+                # Display full tokenized trajectory (PPO Update data)
+                if tokenizer and "input_ids" in data.batch:
+                    try:
+                        full_input_ids = data.batch["input_ids"][i]
+                        # Get valid length from attention mask
+                        if attention_mask is not None:
+                            valid_full_len = attention_mask[i].sum().item()
+                            valid_input_ids = full_input_ids[-int(valid_full_len):]
+                        else:
+                            valid_input_ids = full_input_ids
+                        # Decode without skipping special tokens to show full structure
+                        full_trajectory = tokenizer.decode(valid_input_ids, skip_special_tokens=False)
+                        print("[完整对话轨迹] (PPO Update 使用的数据)")
+                        print("="*80)
+                        print(full_trajectory)
+                        print("="*80)
+                    except Exception as e:
+                        print(f"[完整对话轨迹] 解码失败: {e}")
+                
+                print("-" * 40)
+                
                 # Display prompt (no truncation)
                 prompt_display = prompt_text if prompt_text else "无prompt信息"
                 print(f"问诊提示:\n{prompt_display}")
@@ -486,6 +507,27 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                 else:
                     print("【训练阶段奖励计算示例】")
                 print("="*80)
+                
+                # Display full tokenized trajectory (PPO Update data)
+                if tokenizer and "input_ids" in data.batch:
+                    try:
+                        full_input_ids = data.batch["input_ids"][i]
+                        # Get valid length from attention mask
+                        if attention_mask is not None:
+                            valid_full_len = attention_mask[i].sum().item()
+                            valid_input_ids = full_input_ids[-int(valid_full_len):]
+                        else:
+                            valid_input_ids = full_input_ids
+                        # Decode without skipping special tokens to show full structure
+                        full_trajectory = tokenizer.decode(valid_input_ids, skip_special_tokens=False)
+                        print("[完整对话轨迹] (PPO Update 使用的数据)")
+                        print("="*80)
+                        print(full_trajectory)
+                        print("="*80)
+                    except Exception as e:
+                        print(f"[完整对话轨迹] 解码失败: {e}")
+                
+                print("-" * 40)
                 
                 # Display prompt (no truncation)
                 prompt_display = prompt_text if prompt_text else "无prompt信息"
