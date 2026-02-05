@@ -415,10 +415,11 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                 if tokenizer and "input_ids" in data.batch:
                     try:
                         full_input_ids = data.batch["input_ids"][i]
-                        # Get valid length from attention mask
+                        # Get valid tokens by filtering out padding using attention_mask
+                        # input_ids is left-padded, so valid tokens are where attention_mask == 1
                         if attention_mask is not None:
-                            valid_full_len = attention_mask[i].sum().item()
-                            valid_input_ids = full_input_ids[-int(valid_full_len):]
+                            valid_mask = attention_mask[i].bool()
+                            valid_input_ids = full_input_ids[valid_mask]
                         else:
                             valid_input_ids = full_input_ids
                         # Decode without skipping special tokens to show full structure
@@ -512,10 +513,11 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                 if tokenizer and "input_ids" in data.batch:
                     try:
                         full_input_ids = data.batch["input_ids"][i]
-                        # Get valid length from attention mask
+                        # Get valid tokens by filtering out padding using attention_mask
+                        # input_ids is left-padded, so valid tokens are where attention_mask == 1
                         if attention_mask is not None:
-                            valid_full_len = attention_mask[i].sum().item()
-                            valid_input_ids = full_input_ids[-int(valid_full_len):]
+                            valid_mask = attention_mask[i].bool()
+                            valid_input_ids = full_input_ids[valid_mask]
                         else:
                             valid_input_ids = full_input_ids
                         # Decode without skipping special tokens to show full structure

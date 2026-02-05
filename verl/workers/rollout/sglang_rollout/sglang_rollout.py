@@ -21,6 +21,7 @@ import multiprocessing as mp
 import os
 import time
 from copy import deepcopy
+import json
 from json import JSONDecodeError
 from typing import Any, List, Optional, Tuple
 from uuid import uuid4
@@ -988,9 +989,41 @@ class SGLangRollout(BaseRollout):
         if current_turns >= self.config.multi_turn.max_assistant_turns:
             finish_reason_type = FinishReasonTypeEnum.STOP
 
+        # Build full trajectory text from messages for format checking
+        def build_full_trajectory(messages: list[Message]) -> str:
+            """从消息列表构建完整的对话轨迹文本，用于格式检查。
+            
+            对于有 tool_calls 的 assistant 消息，需要在 content 之后重建
+            <tool_call>...</tool_call> 标签，以便格式检查能正确检测工具调用格式。
+            """
+            trajectory_parts = []
+            for msg in messages:
+                role = msg.role
+                content = msg.content if isinstance(msg.content, str) else str(msg.content)
+                
+                # 如果是 assistant 消息且有 tool_calls，需要重建 <tool_call> 标签
+                if role == "assistant" and msg.tool_calls:
+                    tool_call_strs = []
+                    for tc in msg.tool_calls:
+                        tool_call_json = json.dumps({
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments
+                        }, ensure_ascii=False)
+                        tool_call_strs.append(f"<tool_call>\n{tool_call_json}\n</tool_call>")
+                    # 将重建的 tool_call 标签添加到 content 之后
+                    content = content + "\n" + "\n".join(tool_call_strs)
+                
+                trajectory_parts.append(f"{role}: {content}")
+            return "\n".join(trajectory_parts)
+        
+        full_trajectory = build_full_trajectory(_req.messages)
+
         # Calculate the reward for each tool
         async def calc_reward_and_release_fn(name: str, tool: BaseTool):
-            reward = await tool.calc_reward(_req.request_id, **_req.tools_kwargs[name].get("calc_reward_kwargs", {}))
+            calc_kwargs = _req.tools_kwargs[name].get("calc_reward_kwargs", {}).copy()
+            # 传递完整轨迹给格式检查
+            calc_kwargs["full_trajectory"] = full_trajectory
+            reward = await tool.calc_reward(_req.request_id, **calc_kwargs)
             await tool.release(_req.request_id, **_req.tools_kwargs[name].get("release_kwargs", {}))
             return name, reward
 

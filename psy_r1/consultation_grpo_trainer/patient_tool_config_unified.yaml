@@ -1,0 +1,90 @@
+# 统一的 Tool 配置文件
+# 支持通过环境变量动态配置各项功能开关
+# 
+# 环境变量说明：
+#   USE_STRICT_FORMAT_CHECK: 是否启用严格格式检查 (true/false, 默认 false)
+#   USE_LENGTH_REWARD: 是否启用长度奖励 (true/false, 默认 false)
+#   LENGTH_REWARD_WEIGHT: 长度奖励权重 (0.0-1.0, 默认 0.2)
+#   LENGTH_MIN_TURNS: 最小合理轮数 (默认 10)
+#   LENGTH_OPTIMAL_START: 最优区间开始 (默认 15)
+#   LENGTH_OPTIMAL_END: 最优区间结束 (默认 25)
+#   LENGTH_MAX_TURNS: 最大合理轮数 (默认 50)
+#
+# 注意：此配置文件使用固定值，如需动态配置请使用对应的 shell 脚本生成
+
+tools:
+  - class_name: "psy_r1.verl.tools.patient_interaction_tools.AskPatientTool"
+    config:
+      type: native
+      patient_agent_url: "http://192.168.5.188:8001"
+      default_patient_version: "v3"
+      default_model_name: "Qwen3-32B"
+      timeout: 120
+      max_history: 15
+      log_payload: false
+      log_messages: false
+      log_complete_dialogue: true
+      max_retries: 3
+      retry_delay: 2.0
+      retry_backoff: 1.5
+    tool_schema:
+      type: "function"
+      function:
+        name: "ask_patient"
+        description: "向本地 Patient Agent 提问并获取回答。"
+        parameters:
+          type: "object"
+          properties:
+            question:
+              type: "string"
+              description: "需要向患者提出的问题。"
+            patient_id:
+              type: "string"
+              description: "可选，覆盖默认患者 ID。"
+            patient_version:
+              type: "string"
+              description: "可选，覆盖患者版本（默认 v3）。"
+            model_name:
+              type: "string"
+              description: "可选，Patient Agent 使用的底模名称。"
+          required: ["question"]
+
+  - class_name: "psy_r1.verl.tools.patient_interaction_tools.DiagnoseRewardTool"
+    config:
+      type: native
+      default_patient_version: "v3"
+      log_complete_dialogue: true
+      
+      # ============ 格式检查配置 ============
+      # 严格格式检查：检查 think/tool_call/diagnose 三项格式要求
+      # 简单格式检查：仅检查 <box>...</box> 标签
+      use_strict_format_check: ${USE_STRICT_FORMAT_CHECK:-false}
+      
+      # ============ 长度奖励配置 ============
+      # 梯形奖励函数：鼓励充分问诊
+      use_length_reward: ${USE_LENGTH_REWARD:-false}
+      length_reward_weight: ${LENGTH_REWARD_WEIGHT:-0.2}
+      length_reward_config:
+        min_turns: ${LENGTH_MIN_TURNS:-10}
+        optimal_start: ${LENGTH_OPTIMAL_START:-15}
+        optimal_end: ${LENGTH_OPTIMAL_END:-25}
+        max_turns: ${LENGTH_MAX_TURNS:-50}
+        
+    tool_schema:
+      type: "function"
+      function:
+        name: "do_diagnose"
+        description: "提交最终 ICD-10 诊断并计算奖励。必须在 diagnosis 参数中提供完整的诊断推理过程和 ICD 代码。"
+        parameters:
+          type: "object"
+          properties:
+            diagnosis:
+              type: "string"
+              description: "完整的诊断文本，必须包含：1) <think>诊断推理过程</think> 2) <box>ICD-10代码</box>。例如：<think>患者表现为持续情绪低落...</think> <box>F32.1</box>"
+            patient_id:
+              type: "string"
+              description: "可选，覆盖患者 ID。"
+            patient_version:
+              type: "string"
+              description: "可选，覆盖患者版本。"
+          required: ["diagnosis"]

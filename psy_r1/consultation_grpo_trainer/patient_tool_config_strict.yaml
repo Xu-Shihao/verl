@@ -1,0 +1,77 @@
+# 启用严格格式检查的 Tool 配置
+# 与 patient_tool_config.yaml 的区别：use_strict_format_check: true
+tools:
+  - class_name: "psy_r1.verl.tools.patient_interaction_tools.AskPatientTool"
+    config:
+      type: native
+      patient_agent_url: "http://192.168.5.188:8001"
+      default_patient_version: "v3"
+      default_model_name: "Qwen3-32B"
+      timeout: 120
+      max_history: 15
+      log_payload: false  # 关闭每次请求的payload输出
+      log_messages: false  # 关闭每次请求的messages输出
+      log_complete_dialogue: true  # 在对话完成时输出完整对话
+      # 重试机制配置
+      max_retries: 3        # 最大重试次数
+      retry_delay: 2.0      # 初始重试延迟（秒）
+      retry_backoff: 1.5    # 重试退避倍数（指数退避）
+    tool_schema:
+      type: "function"
+      function:
+        name: "ask_patient"
+        description: "向本地 Patient Agent 提问并获取回答。"
+        parameters:
+          type: "object"
+          properties:
+            question:
+              type: "string"
+              description: "需要向患者提出的问题。"
+            patient_id:
+              type: "string"
+              description: "可选，覆盖默认患者 ID。"
+            patient_version:
+              type: "string"
+              description: "可选，覆盖患者版本（默认 v3）。"
+            model_name:
+              type: "string"
+              description: "可选，Patient Agent 使用的底模名称。"
+          required: ["question"]
+
+  - class_name: "psy_r1.verl.tools.patient_interaction_tools.DiagnoseRewardTool"
+    config:
+      type: native
+      default_patient_version: "v3"
+      log_complete_dialogue: true  # 在对话完成时输出完整对话
+      # 格式检查配置
+      use_strict_format_check: true  # 启用严格格式检查
+                                      # 检查 think/tool_call/diagnose 三项格式要求：
+                                      # 1. 每一轮工具调用前需要包含一个且只有一个 <think>...</think> 区块
+                                      # 2. 每一个 <tool_call>...</tool_call> JSON 结构合法
+                                      # 3. 最后一个 <tool_call> 的 name 为 do_diagnose，且 diagnosis 里面包含 <box>...</box>
+      # 长度奖励配置
+      use_length_reward: false  # 是否启用长度奖励（默认关闭）
+      length_reward_weight: 0.2  # 长度奖励权重（当启用时生效）
+      length_reward_config:  # 梯形奖励函数参数
+        min_turns: 10        # 最小合理轮数
+        optimal_start: 15    # 最优区间开始
+        optimal_end: 25      # 最优区间结束（满分区间）
+        max_turns: 50        # 最大合理轮数
+    tool_schema:
+      type: "function"
+      function:
+        name: "do_diagnose"
+        description: "提交最终 ICD-10 诊断并计算奖励。必须在 diagnosis 参数中提供完整的诊断推理过程和 ICD 代码。"
+        parameters:
+          type: "object"
+          properties:
+            diagnosis:
+              type: "string"
+              description: "完整的诊断文本，必须包含：1) <think>诊断推理过程</think> 2) <box>ICD-10代码</box>。例如：<think>患者表现为持续情绪低落...</think> <box>F32.1</box>"
+            patient_id:
+              type: "string"
+              description: "可选，覆盖患者 ID。"
+            patient_version:
+              type: "string"
+              description: "可选，覆盖患者版本。"
+          required: ["diagnosis"]
