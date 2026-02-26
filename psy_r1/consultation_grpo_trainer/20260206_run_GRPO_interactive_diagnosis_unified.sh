@@ -46,7 +46,7 @@ LENGTH_MIN_TURNS=10
 LENGTH_OPTIMAL_START=15
 LENGTH_OPTIMAL_END=25
 LENGTH_MAX_TURNS=50
-CUSTOM_SUFFIX=""
+CUSTOM_SUFFIX="_v3"
 
 # SIG (Shapley Information Gain) 奖励参数
 USE_SIG_REWARD=false
@@ -54,71 +54,6 @@ SIG_REWARD_WEIGHT=0.5
 SIG_CORRECTNESS_BONUS_WEIGHT=0.3
 SIG_MONTE_CARLO_K=50
 SIG_LLM_BASE_URL="http://localhost:8000/v1"
-
-# 解析参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --strict-format)
-            USE_STRICT_FORMAT_CHECK=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sf"
-            shift
-            ;;
-        --length-reward)
-            USE_LENGTH_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_lr"
-            shift
-            ;;
-        --length-weight)
-            LENGTH_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --length-min-turns)
-            LENGTH_MIN_TURNS="$2"
-            shift 2
-            ;;
-        --length-optimal-start)
-            LENGTH_OPTIMAL_START="$2"
-            shift 2
-            ;;
-        --length-optimal-end)
-            LENGTH_OPTIMAL_END="$2"
-            shift 2
-            ;;
-        --length-max-turns)
-            LENGTH_MAX_TURNS="$2"
-            shift 2
-            ;;
-        --sig-reward)
-            USE_SIG_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sig"
-            shift
-            ;;
-        --sig-weight)
-            SIG_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-correctness-weight)
-            SIG_CORRECTNESS_BONUS_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-monte-carlo-k)
-            SIG_MONTE_CARLO_K="$2"
-            shift 2
-            ;;
-        --sig-llm-url)
-            SIG_LLM_BASE_URL="$2"
-            shift 2
-            ;;
-        --suffix)
-            CUSTOM_SUFFIX="_$2"
-            shift 2
-            ;;
-        *)
-            # 其他参数传递给训练脚本
-            break
-            ;;
-    esac
-done
 
 # ============================================================================
 # 环境配置
@@ -146,12 +81,12 @@ HOME="/tcci_mnt/shihao/project/verl"
 # 模型和数据配置
 # ============================================================================
 
-MODEL_PATH="/tcci_mnt/shihao/models/Qwen3-8B"
+MODEL_PATH="/tcci_mnt/shihao/outputs/toocall_interactive/qwen3-8B_interactive_toolcall_lora-sft_lingxidiag-16k_v3_0210"
 MODEL_BASE_NAME="qwen3-8B_interactive_diagnosis${CUSTOM_SUFFIX}"
 NNODES=1
 
 # Patient Agent 配置
-PATIENT_AGENT_URL="http://192.168.5.188:8001"
+PATIENT_AGENT_URL="http://192.168.5.187:8001"
 PATIENT_MODEL="Qwen3-1.7B"
 
 # 项目配置
@@ -206,8 +141,8 @@ entropy_coeff=0
 # ============================================================================
 
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy/train.parquet"
-VAL_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy/val.parquet"
+TRAIN_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy-v2/train.parquet"
+VAL_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy-v2/val.parquet"
 
 # ============================================================================
 # 交互式问诊参数

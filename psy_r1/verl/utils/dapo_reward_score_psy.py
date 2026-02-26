@@ -182,9 +182,40 @@ def extract_recommendation_codes(response_text, debug=False):
     return final_codes
 
 
+def _map_to_12class(major_codes):
+    """
+    将ICD大类代码列表映射到12分类体系（11类 + Others）
+    
+    不在ALLOWED_DISEASES中的代码统一映射为"Others"
+    
+    例如:
+      ['F32', 'F41'] → ['F32', 'F41']   (均在11类中)
+      ['F33']        → ['Others']        (F33不在11类中)
+      ['F33', 'F41'] → ['F41', 'Others'] (F33→Others, F41保留)
+      ['F28', 'F33'] → ['Others']        (两个都不在11类中，去重后只有Others)
+    """
+    mapped = []
+    seen = set()
+    for code in major_codes:
+        if code in ICD10Utils.ALLOWED_DISEASES:
+            if code not in seen:
+                seen.add(code)
+                mapped.append(code)
+        else:
+            if "Others" not in seen:
+                seen.add("Others")
+                mapped.append("Others")
+    return mapped
+
+
 def calculate_icd_reward(solution_str, ground_truth, extra_info=None, debug=False):
     """
     计算ICD代码推荐任务的奖励分数
+    
+    12分类体系：11个已知ICD大类 + Others（不在11类中的统一归为Others）
+    - ground truth中不在11类的代码 → 映射为Others
+    - 模型预测中不在11类的代码 → 映射为Others
+    - 两边都按12分类来比较exact match
     
     Args:
         solution_str: 模型生成的响应文本
@@ -214,19 +245,25 @@ def calculate_icd_reward(solution_str, ground_truth, extra_info=None, debug=Fals
         else:
             gt_codes = [str(ground_truth)] if ground_truth else []
         
-        # 提取大类代码并过滤为允许的疾病
-        predicted_major_codes = ICD10Utils.extract_major_classes_from_list(predicted_codes)
-        gt_major_codes = ICD10Utils.extract_major_classes_from_list(gt_codes)
+        # 提取大类代码（不过滤，保留所有有效的Fxx/Z71代码）
+        predicted_major_codes_raw = ICD10Utils.extract_major_classes_from_list(predicted_codes)
+        gt_major_codes_raw = _extract_all_major_codes(gt_codes)
+        
+        # 映射到12分类体系（不在11类中的 → Others）
+        predicted_major_codes = _map_to_12class(predicted_major_codes_raw)
+        gt_major_codes = _map_to_12class(gt_major_codes_raw)
         
         if debug:
-            print(f"预测的大类代码: {predicted_major_codes}")
-            print(f"真实的大类代码: {gt_major_codes}")
+            print(f"预测的大类代码(原始): {predicted_major_codes_raw}")
+            print(f"真实的大类代码(原始): {gt_major_codes_raw}")
+            print(f"预测的大类代码(12分类): {predicted_major_codes}")
+            print(f"真实的大类代码(12分类): {gt_major_codes}")
         
         # 计算格式正确性（是否有<box>标签且提取到代码）
         has_box_format = '<box>' in solution_str and '</box>' in solution_str
         format_score = 1.0 if (has_box_format and len(predicted_codes) > 0) else 0.0
         
-        # 计算exact match（集合完全匹配）
+        # 计算exact match（集合完全匹配，基于12分类）
         predicted_set = set(predicted_major_codes)
         gt_set = set(gt_major_codes)
         exact_match = 1.0 if predicted_set == gt_set else 0.0
@@ -295,6 +332,35 @@ def calculate_icd_reward(solution_str, ground_truth, extra_info=None, debug=Fals
             "error": str(e),
             "data_source": "icd_recommendation"
         }
+
+
+def _extract_all_major_codes(codes):
+    """
+    从代码列表中提取所有ICD大类代码（不过滤ALLOWED_DISEASES）
+    
+    与ICD10Utils.extract_major_classes_from_list不同，此函数保留所有有效的Fxx/Z71代码，
+    不通过ALLOWED_DISEASES过滤。
+    """
+    if not codes:
+        return []
+    
+    if not isinstance(codes, list):
+        codes = [codes]
+    
+    major_codes = []
+    seen = set()
+    for code in codes:
+        if code is None:
+            continue
+        code_str = str(code).strip()
+        match = re.match(r'([FZ]\d{2})', code_str.upper())
+        if match:
+            major = match.group(1)
+            if major not in seen:
+                seen.add(major)
+                major_codes.append(major)
+    
+    return major_codes
 
 
 def create_dapo_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=False, symptom_alpha=0.1, use_icd_reward=False):

@@ -40,13 +40,13 @@ set -xeuo pipefail
 # 解析命令行参数
 # ============================================================================
 USE_STRICT_FORMAT_CHECK=false
-USE_LENGTH_REWARD=false
+USE_LENGTH_REWARD=true
 LENGTH_REWARD_WEIGHT=0.2
 LENGTH_MIN_TURNS=10
 LENGTH_OPTIMAL_START=15
 LENGTH_OPTIMAL_END=25
 LENGTH_MAX_TURNS=50
-CUSTOM_SUFFIX=""
+CUSTOM_SUFFIX="_lr"
 
 # SIG (Shapley Information Gain) 奖励参数
 USE_SIG_REWARD=false
@@ -55,74 +55,12 @@ SIG_CORRECTNESS_BONUS_WEIGHT=0.3
 SIG_MONTE_CARLO_K=50
 SIG_LLM_BASE_URL="http://localhost:8000/v1"
 
-# 解析参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --strict-format)
-            USE_STRICT_FORMAT_CHECK=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sf"
-            shift
-            ;;
-        --length-reward)
-            USE_LENGTH_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_lr"
-            shift
-            ;;
-        --length-weight)
-            LENGTH_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --length-min-turns)
-            LENGTH_MIN_TURNS="$2"
-            shift 2
-            ;;
-        --length-optimal-start)
-            LENGTH_OPTIMAL_START="$2"
-            shift 2
-            ;;
-        --length-optimal-end)
-            LENGTH_OPTIMAL_END="$2"
-            shift 2
-            ;;
-        --length-max-turns)
-            LENGTH_MAX_TURNS="$2"
-            shift 2
-            ;;
-        --sig-reward)
-            USE_SIG_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sig"
-            shift
-            ;;
-        --sig-weight)
-            SIG_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-correctness-weight)
-            SIG_CORRECTNESS_BONUS_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-monte-carlo-k)
-            SIG_MONTE_CARLO_K="$2"
-            shift 2
-            ;;
-        --sig-llm-url)
-            SIG_LLM_BASE_URL="$2"
-            shift 2
-            ;;
-        --suffix)
-            CUSTOM_SUFFIX="_$2"
-            shift 2
-            ;;
-        *)
-            # 其他参数传递给训练脚本
-            break
-            ;;
-    esac
-done
-
 # ============================================================================
 # 环境配置
 # ============================================================================
+
+export NO_PROXY='192.168.5.187'
+export no_proxy='192.168.5.187'
 
 # 设置WANDB
 export WANDB_MODE=online
@@ -146,13 +84,13 @@ HOME="/tcci_mnt/shihao/project/verl"
 # 模型和数据配置
 # ============================================================================
 
-MODEL_PATH="/tcci_mnt/shihao/models/Qwen3-8B"
-MODEL_BASE_NAME="qwen3-8B_interactive_diagnosis${CUSTOM_SUFFIX}"
+MODEL_PATH="/tcci_mnt/shihao/outputs/toocall_interactive/qwen3-8B_interactive_toolcall_lora-sft_lingxidiag-16k_0207"
+MODEL_BASE_NAME="qwen3-8B-toocall-sft_interactive_diagnosis${CUSTOM_SUFFIX}"
 NNODES=1
 
 # Patient Agent 配置
-PATIENT_AGENT_URL="http://192.168.5.188:8001"
-PATIENT_MODEL="Qwen3-1.7B"
+PATIENT_AGENT_URL="http://192.168.5.189:8001"
+PATIENT_MODEL="Qwen3-32B"
 
 # 项目配置
 project_name='SMHC_Interactive_Diagnosis_MultiTurn_RL'
@@ -179,6 +117,7 @@ kl_loss_type=low_var_kl
 
 max_prompt_length=2048
 max_response_length=10240  # 支持多轮对话
+max_num_batched_tokens=16000
 
 # ============================================================================
 # 训练配置
@@ -396,7 +335,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.55 \
     actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
-    actor_rollout_ref.rollout.max_num_batched_tokens=16000 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=${max_num_batched_tokens} \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${infer_micro_batch_size} \
     actor_rollout_ref.rollout.temperature=${temperature} \
     actor_rollout_ref.rollout.top_p=${top_p} \

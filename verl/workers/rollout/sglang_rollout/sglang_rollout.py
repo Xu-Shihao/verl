@@ -1100,9 +1100,9 @@ class SGLangRollout(BaseRollout):
         **kwargs,
     ) -> List[AsyncRolloutRequest]:
         """Dynamic sampling: start more rollouts than needed, return first target_count completed ones.
-        
+
         This avoids bubble behavior where long trajectories delay the entire batch.
-        
+
         Args:
             req_list: List of rollout requests to process (may be more than target_count).
             target_count: Number of completed rollouts needed.
@@ -1110,21 +1110,34 @@ class SGLangRollout(BaseRollout):
             is_validate: Whether this is a validation run.
             timeout: Optional timeout in seconds; if None, wait for target_count to complete.
             **kwargs: Additional arguments passed to _async_rollout_a_request.
-            
+
         Returns:
             List of completed AsyncRolloutRequest objects (length == target_count if enough complete).
         """
         completed_requests: List[AsyncRolloutRequest] = []
         pending_tasks: dict[asyncio.Task, AsyncRolloutRequest] = {}
-        
+        failed_count = 0
+
+        # Progress tracking - 使用环境变量控制是否启用
+        # 支持两种方式: VERL_ROLLOUT_PROGRESS=1 启用, DISABLE_ROLLOUT_PROGRESS=1 禁用
+        enable_progress = (os.environ.get("VERL_ROLLOUT_PROGRESS", "1") == "1" and
+                          os.environ.get("DISABLE_ROLLOUT_PROGRESS", "0") != "1")
+        progress_interval = 2.0  # 每2秒更新一次
+        last_progress_time = time.time()
+        start_time = time.time()
+        mode_str = "val" if is_validate else "train"
+
+        if enable_progress:
+            print(f"[Rollout-{mode_str}] Starting {target_count} trajectories (pool={len(req_list)})...", flush=True)
+
         # Create tasks for all requests
         for req in req_list:
             task = asyncio.create_task(self._async_rollout_a_request(req, do_sample, is_validate, **kwargs))
             pending_tasks[task] = req
-        
+
         # Use asyncio.wait with FIRST_COMPLETED to get results as they finish
         remaining_tasks = set(pending_tasks.keys())
-        
+
         while len(completed_requests) < target_count and remaining_tasks:
             # Wait for at least one task to complete
             done, remaining_tasks = await asyncio.wait(
@@ -1132,14 +1145,16 @@ class SGLangRollout(BaseRollout):
                 timeout=timeout,
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            
+
             if not done and timeout is not None:
                 # Timeout reached, break out
                 logger.warning(
                     f"Dynamic sampling timeout reached. Got {len(completed_requests)}/{target_count} samples."
                 )
+                if enable_progress:
+                    print(f"[Rollout-{mode_str}] Timeout! {len(completed_requests)}/{target_count}", flush=True)
                 break
-            
+
             for task in done:
                 try:
                     result = task.result()
@@ -1151,9 +1166,23 @@ class SGLangRollout(BaseRollout):
                         if len(completed_requests) >= target_count:
                             break
                 except Exception as e:
+                    failed_count += 1
                     logger.warning(f"Rollout task failed: {e}")
                     continue
-        
+
+            # Progress output with rate limiting
+            if enable_progress:
+                current_time = time.time()
+                if current_time - last_progress_time >= progress_interval:
+                    last_progress_time = current_time
+                    elapsed = current_time - start_time
+                    rate = len(completed_requests) / elapsed if elapsed > 0 else 0
+                    remaining = (target_count - len(completed_requests)) / rate if rate > 0 else 0
+                    pct = 100 * len(completed_requests) / target_count if target_count > 0 else 0
+                    fail_str = f", fail={failed_count}" if failed_count > 0 else ""
+                    print(f"[Rollout-{mode_str}] {len(completed_requests)}/{target_count} ({pct:.0f}%) "
+                          f"[{elapsed:.0f}s<{remaining:.0f}s, {rate:.1f}/s{fail_str}]", flush=True)
+
         # NOTE: We do NOT cancel remaining tasks to avoid CUDA memory access errors.
         # SGLang async tasks use CUDA resources that cannot be safely cancelled.
         # Instead, we let them complete in the background and just ignore their results.
@@ -1168,7 +1197,13 @@ class SGLangRollout(BaseRollout):
                 await asyncio.gather(*remaining_tasks, return_exceptions=True)
             except Exception:
                 pass
-        
+
+        # Final progress output
+        if enable_progress:
+            elapsed = time.time() - start_time
+            success = len(completed_requests)
+            print(f"[Rollout-{mode_str}] Done: {success}/{target_count} ok, {failed_count} failed, {elapsed:.1f}s", flush=True)
+
         return completed_requests[:target_count]
 
     @GPUMemoryLogger(role="sglang rollout", logger=logger)

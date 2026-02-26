@@ -624,10 +624,10 @@ def compute_diagnosis_score(
         
         # 计算诊断正确率分数
         diagnosis_score = 1.0 if is_correct else 0.0
-        
-        # 始终计算症状分类准确率（用于监控和评估）
+
+        # 只有在启用症状奖励时才计算症状分类准确率（避免不必要的文件加载）
         symptom_info = {"symptom_accuracy": 0.0, "symptom_f1": 0.0, "symptom_coverage": 0.0}
-        if patient_id is not None:
+        if use_symptom_reward and patient_id is not None:
             symptom_info = calculate_symptom_accuracy(patient_id, model_response) # patient_id 为 {id}_conv{i}
         
         symptom_f1 = symptom_info.get("symptom_f1", 0.0)

@@ -1,36 +1,26 @@
 #!/usr/bin/env bash
 # ============================================================================
-# GRPO 交互式问诊训练脚本 - 统一版本
+# GRPO 交互式问诊训练脚本 - v2 (修复 tool_parser + tool description)
 # ============================================================================
+# 相比 20260207 版本的关键修改：
+#   1. tool_parser 从 llama3_json 改为 hermes（匹配 SFT 训练的 <tool_call> 格式）
+#   2. do_diagnose 的 diagnosis 参数描述统一为只要求 <box>ICD-10代码</box>
+#   3. 使用 v2 数据集（system prompt 与 SFT 数据格式一致）
+#
 # 支持以下可配置功能：
 #   1. 严格格式检查 (strict_format)
 #   2. 梯形长度奖励函数 (length_reward)
 #   3. SIG过程奖励 (sig_reward) - Shapley Information Gain
 #
 # 使用方法：
-#   # 默认配置（关闭所有额外功能）
-#   ./run_GRPO_interactive_diagnosis_unified.sh
+#   # 默认配置
+#   ./20260208_run_GRPO_interactive_diagnosis_unified_sft_v2.sh
 #
 #   # 启用严格格式检查
-#   ./run_GRPO_interactive_diagnosis_unified.sh --strict-format
+#   ./20260208_run_GRPO_interactive_diagnosis_unified_sft_v2.sh --strict-format
 #
-#   # 启用长度奖励
-#   ./run_GRPO_interactive_diagnosis_unified.sh --length-reward
-#
-#   # 同时启用两项功能
-#   ./run_GRPO_interactive_diagnosis_unified.sh --strict-format --length-reward
-#
-#   # 自定义长度奖励参数
-#   ./run_GRPO_interactive_diagnosis_unified.sh --length-reward --length-weight 0.3
-#
-#   # 启用SIG过程奖励（Shapley Information Gain）
-#   ./run_GRPO_interactive_diagnosis_unified.sh --sig-reward
-#
-#   # 自定义SIG参数
-#   ./run_GRPO_interactive_diagnosis_unified.sh --sig-reward --sig-weight 0.5 --sig-monte-carlo-k 50
-#
-#   # 同时启用所有功能
-#   ./run_GRPO_interactive_diagnosis_unified.sh --strict-format --length-reward --sig-reward
+#   # 启用长度奖励（默认已启用）
+#   ./20260208_run_GRPO_interactive_diagnosis_unified_sft_v2.sh --length-reward
 #
 # ============================================================================
 
@@ -40,89 +30,27 @@ set -xeuo pipefail
 # 解析命令行参数
 # ============================================================================
 USE_STRICT_FORMAT_CHECK=false
-USE_LENGTH_REWARD=false
+USE_LENGTH_REWARD=true
 LENGTH_REWARD_WEIGHT=0.2
 LENGTH_MIN_TURNS=10
 LENGTH_OPTIMAL_START=15
 LENGTH_OPTIMAL_END=25
 LENGTH_MAX_TURNS=50
-CUSTOM_SUFFIX=""
+CUSTOM_SUFFIX="_lr_v2"
 
 # SIG (Shapley Information Gain) 奖励参数
 USE_SIG_REWARD=false
 SIG_REWARD_WEIGHT=0.5
 SIG_CORRECTNESS_BONUS_WEIGHT=0.3
 SIG_MONTE_CARLO_K=50
-SIG_LLM_BASE_URL="http://localhost:8000/v1"
-
-# 解析参数
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --strict-format)
-            USE_STRICT_FORMAT_CHECK=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sf"
-            shift
-            ;;
-        --length-reward)
-            USE_LENGTH_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_lr"
-            shift
-            ;;
-        --length-weight)
-            LENGTH_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --length-min-turns)
-            LENGTH_MIN_TURNS="$2"
-            shift 2
-            ;;
-        --length-optimal-start)
-            LENGTH_OPTIMAL_START="$2"
-            shift 2
-            ;;
-        --length-optimal-end)
-            LENGTH_OPTIMAL_END="$2"
-            shift 2
-            ;;
-        --length-max-turns)
-            LENGTH_MAX_TURNS="$2"
-            shift 2
-            ;;
-        --sig-reward)
-            USE_SIG_REWARD=true
-            CUSTOM_SUFFIX="${CUSTOM_SUFFIX}_sig"
-            shift
-            ;;
-        --sig-weight)
-            SIG_REWARD_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-correctness-weight)
-            SIG_CORRECTNESS_BONUS_WEIGHT="$2"
-            shift 2
-            ;;
-        --sig-monte-carlo-k)
-            SIG_MONTE_CARLO_K="$2"
-            shift 2
-            ;;
-        --sig-llm-url)
-            SIG_LLM_BASE_URL="$2"
-            shift 2
-            ;;
-        --suffix)
-            CUSTOM_SUFFIX="_$2"
-            shift 2
-            ;;
-        *)
-            # 其他参数传递给训练脚本
-            break
-            ;;
-    esac
-done
+SIG_LLM_BASE_URL="http://192.168.5.189:8001/v1"
 
 # ============================================================================
 # 环境配置
 # ============================================================================
+
+export NO_PROXY='192.168.5.187'
+export no_proxy='192.168.5.187'
 
 # 设置WANDB
 export WANDB_MODE=online
@@ -146,13 +74,13 @@ HOME="/tcci_mnt/shihao/project/verl"
 # 模型和数据配置
 # ============================================================================
 
-MODEL_PATH="/tcci_mnt/shihao/models/Qwen3-8B"
-MODEL_BASE_NAME="qwen3-8B_interactive_diagnosis${CUSTOM_SUFFIX}"
+MODEL_PATH="/tcci_mnt/shihao/outputs/toocall_interactive/qwen3-8B_interactive_toolcall_lora-sft_lingxidiag-16k_0207"
+MODEL_BASE_NAME="qwen3-8B-toocall-sft_interactive_diagnosis${CUSTOM_SUFFIX}"
 NNODES=1
 
 # Patient Agent 配置
-PATIENT_AGENT_URL="http://192.168.5.188:8001"
-PATIENT_MODEL="Qwen3-1.7B"
+PATIENT_AGENT_URL="http://192.168.5.189:8001"
+PATIENT_MODEL="Qwen3-32B"
 
 # 项目配置
 project_name='SMHC_Interactive_Diagnosis_MultiTurn_RL'
@@ -177,8 +105,9 @@ kl_loss_type=low_var_kl
 # 数据配置
 # ============================================================================
 
-max_prompt_length=2048
+max_prompt_length=3096
 max_response_length=10240  # 支持多轮对话
+max_num_batched_tokens=16000
 
 # ============================================================================
 # 训练配置
@@ -202,12 +131,12 @@ top_k=-1
 entropy_coeff=0
 
 # ============================================================================
-# 路径配置
+# 路径配置（使用 v2 数据集）
 # ============================================================================
 
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy/train.parquet"
-VAL_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy/val.parquet"
+TRAIN_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy-v2/train.parquet"
+VAL_FILE="$HOME/psy_r1/dataset_rl/LingxiDiag-interactive-long-empathy-v2/val.parquet"
 
 # ============================================================================
 # 交互式问诊参数
@@ -220,22 +149,23 @@ USE_ICD_REWARD=True
 # ============================================================================
 # 动态生成 Tool 配置文件
 # ============================================================================
+# 关键修复：
+#   1. do_diagnose 的 diagnosis 参数描述去掉了 <think> 要求，
+#      只要求 <box>ICD-10代码</box>，与 SFT 数据一致
+#   2. 训练时 tool_parser 用 hermes 而非 llama3_json
+# ============================================================================
 
 TOOL_CONFIG_DIR="${HOME}/psy_r1/consultation_grpo_trainer"
-TOOL_CONFIG="${TOOL_CONFIG_DIR}/patient_tool_config_runtime_${NOW}.yaml"
+TOOL_CONFIG="${TOOL_CONFIG_DIR}/patient_tool_config_runtime_v2_${NOW}.yaml"
 
 cat > "${TOOL_CONFIG}" << EOF
-# 运行时动态生成的 Tool 配置文件
+# 运行时动态生成的 Tool 配置文件 (v2 - 修复版)
 # 生成时间: ${NOW}
 # 配置选项:
+#   - tool_parser: hermes（匹配 Qwen3 SFT 的 <tool_call> 格式）
 #   - use_strict_format_check: ${USE_STRICT_FORMAT_CHECK}
 #   - use_length_reward: ${USE_LENGTH_REWARD}
 #   - length_reward_weight: ${LENGTH_REWARD_WEIGHT}
-#   - length_reward_config: [${LENGTH_MIN_TURNS}, ${LENGTH_OPTIMAL_START}, ${LENGTH_OPTIMAL_END}, ${LENGTH_MAX_TURNS}]
-#   - use_sig_reward: ${USE_SIG_REWARD}
-#   - sig_reward_weight: ${SIG_REWARD_WEIGHT}
-#   - sig_correctness_bonus_weight: ${SIG_CORRECTNESS_BONUS_WEIGHT}
-#   - sig_monte_carlo_k: ${SIG_MONTE_CARLO_K}
 
 tools:
   - class_name: "psy_r1.verl.tools.patient_interaction_tools.AskPatientTool"
@@ -303,13 +233,13 @@ tools:
       type: "function"
       function:
         name: "do_diagnose"
-        description: "提交最终 ICD-10 诊断并计算奖励。必须在 diagnosis 参数中提供完整的诊断推理过程和 ICD 代码。"
+        description: "提交最终 ICD-10 诊断。在 diagnosis 参数中用 <box> 标签包裹 ICD-10 代码。"
         parameters:
           type: "object"
           properties:
             diagnosis:
               type: "string"
-              description: "完整的诊断文本，必须包含：1) <think>诊断推理过程</think> 2) <box>ICD-10代码</box>。例如：<think>患者表现为持续情绪低落...</think> <box>F32.1</box>"
+              description: "ICD-10 诊断代码，必须用 <box> 标签包裹。例如：<box>F32.1</box> 或多个诊断用分号分隔 <box>F32.1; F41.2</box>"
             patient_id:
               type: "string"
               description: "可选，覆盖患者 ID。"
@@ -330,8 +260,13 @@ cd "${HOME}"
 # ============================================================================
 
 echo "============================================================================"
-echo "GRPO 交互式问诊训练 - 统一版本"
+echo "GRPO 交互式问诊训练 - v2 修复版"
 echo "============================================================================"
+echo "修复内容:"
+echo "  - tool_parser: hermes（匹配 SFT 的 <tool_call> 格式）"
+echo "  - do_diagnose description: 只要求 <box>ICD-10代码</box>"
+echo "  - 使用 v2 数据集（统一的 system prompt）"
+echo ""
 echo "模型: ${MODEL_PATH}"
 echo "Patient Agent: ${PATIENT_AGENT_URL}"
 echo "训练数据: ${TRAIN_FILE}"
@@ -354,9 +289,6 @@ else
 fi
 if [ "${USE_SIG_REWARD}" = "true" ]; then
     echo "  - SIG过程奖励: ENABLED (weight=${SIG_REWARD_WEIGHT})"
-    echo "    正确性奖励权重: ${SIG_CORRECTNESS_BONUS_WEIGHT}"
-    echo "    Monte Carlo采样次数: ${SIG_MONTE_CARLO_K}"
-    echo "    LLM API: ${SIG_LLM_BASE_URL}"
 else
     echo "  - SIG过程奖励: DISABLED"
 fi
@@ -368,6 +300,7 @@ echo "==========================================================================
 # ============================================================================
 # 启动训练
 # ============================================================================
+# 关键修改: multi_turn.format=hermes（原为 llama3_json）
 
 HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     data.train_files="${TRAIN_FILE}" \
@@ -396,7 +329,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     actor_rollout_ref.rollout.name=sglang \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.55 \
     actor_rollout_ref.rollout.n=${n_resp_per_prompt} \
-    actor_rollout_ref.rollout.max_num_batched_tokens=16000 \
+    actor_rollout_ref.rollout.max_num_batched_tokens=${max_num_batched_tokens} \
     actor_rollout_ref.rollout.log_prob_micro_batch_size_per_gpu=${infer_micro_batch_size} \
     actor_rollout_ref.rollout.temperature=${temperature} \
     actor_rollout_ref.rollout.top_p=${top_p} \
@@ -406,7 +339,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     actor_rollout_ref.rollout.multi_turn.max_assistant_turns=${MAX_DIALOGUE_TURNS} \
     actor_rollout_ref.rollout.multi_turn.max_user_turns=${MAX_DIALOGUE_TURNS} \
     actor_rollout_ref.rollout.multi_turn.tool_config_path="${TOOL_CONFIG}" \
-    actor_rollout_ref.rollout.multi_turn.format=llama3_json \
+    actor_rollout_ref.rollout.multi_turn.format=hermes \
     actor_rollout_ref.rollout.multi_turn.use_inference_chat_template=False \
     actor_rollout_ref.rollout.multi_turn.tokenization_sanity_check_mode=disable \
     +actor_rollout_ref.rollout.multi_turn.dynamic_sampling.enable=True \

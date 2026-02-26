@@ -256,12 +256,46 @@ def compute_strict_format_score(
         print(f"[FORMAT CHECK] think_valid={think_valid}, json_valid={json_valid}, diagnose_valid={diagnose_valid}")
         if think_errors:
             print(f"  Think errors: {think_errors}")
+            # 打印上下文信息帮助核实问题
+            _print_think_error_context(full_trajectory)
         if json_errors:
             print(f"  JSON errors: {json_errors}")
         if diagnose_errors:
             print(f"  Diagnose errors: {diagnose_errors}")
-    
+
     return result
+
+
+def _print_think_error_context(full_trajectory: str, context_chars: int = 200) -> None:
+    """打印Think错误的上下文信息，帮助调试。"""
+    # 只检查 assistant 消息部分
+    trajectory_to_check = _extract_assistant_content(full_trajectory)
+
+    # 找到所有 tool_call 的位置
+    tool_call_pattern = re.compile(r'<tool_call>(.*?)</tool_call>', re.DOTALL)
+    tool_calls = list(tool_call_pattern.finditer(trajectory_to_check))
+
+    if not tool_calls:
+        return
+
+    print(f"  [CONTEXT] Found {len(tool_calls)} tool_calls")
+
+    # 显示每个tool_call前的上下文片段
+    for i, tc_match in enumerate(tool_calls[:3]):  # 只显示前3个
+        tc_start = tc_match.start()
+        context_start = max(0, tc_start - context_chars)
+        context = trajectory_to_check[context_start:tc_start]
+
+        # 检查是否有think标签
+        has_think = '<think>' in context and '</think>' in context
+        think_status = "✓" if has_think else "✗"
+
+        # 截断显示
+        if len(context) > 100:
+            context = "..." + context[-100:]
+        context = context.replace('\n', '\\n')
+
+        print(f"  [TC{i+1}] think={think_status}, before: {context[:80]}...")
 
 
 def compute_length_reward(
@@ -378,6 +412,7 @@ def compute_interactive_diagnosis_reward(
     use_length_reward: bool = False,
     length_reward_weight: float = 0.0,
     length_reward_config: Optional[Dict[str, int]] = None,
+    format_penalty_weight: float = 0.0,  # v4新增：格式惩罚权重
     return_details: bool = True,
     debug: bool = False,
 ) -> Dict[str, Any]:
@@ -396,6 +431,9 @@ def compute_interactive_diagnosis_reward(
         use_length_reward: 是否启用长度奖励。
         length_reward_weight: 长度奖励的权重系数。
         length_reward_config: 长度奖励的配置参数（min_turns, optimal_start, optimal_end, max_turns）。
+        format_penalty_weight: v4新增，格式惩罚权重（默认 0.0）。
+            当格式不正确时，惩罚 = format_penalty_weight * (1 - format_score)。
+            建议值：0.2 ~ 0.5，可防止模型格式崩溃。
         return_details: 是否返回完整的细节字典。
         debug: 是否输出调试信息。
 
@@ -441,14 +479,26 @@ def compute_interactive_diagnosis_reward(
     
     # 计算最终分数
     base_score = float(result.get("score", 0.0))
+
+    # 添加长度奖励（如果启用）
     if use_length_reward and length_reward_weight > 0:
         final_score = base_score + length_reward_weight * length_score
     else:
         final_score = base_score
-    
+
+    # v4新增：添加格式惩罚（当格式不正确时降低奖励）
+    # format_score: 1.0 = 格式正确，0.0 = 格式错误
+    # 惩罚计算：penalty = format_penalty_weight * (1 - format_score)
+    format_penalty = 0.0
+    if format_penalty_weight > 0 and format_score < 1.0:
+        format_penalty = format_penalty_weight * (1.0 - format_score)
+        final_score = max(0.0, final_score - format_penalty)
+        if debug:
+            print(f"[FORMAT PENALTY] format_score={format_score:.3f}, penalty={format_penalty:.3f}")
+
     if debug and use_length_reward:
         print(f"[REWARD COMPOSITION] base={base_score:.3f}, length={length_score:.3f}, "
-              f"weight={length_reward_weight:.3f}, final={final_score:.3f}")
+              f"weight={length_reward_weight:.3f}, format_penalty={format_penalty:.3f}, final={final_score:.3f}")
 
     if not return_details:
         return {"score": final_score}
@@ -463,6 +513,8 @@ def compute_interactive_diagnosis_reward(
         "use_strict_format_check": use_strict_format_check,
         "acc": bool(result.get("acc", False)),
         "format_score": format_score,
+        "format_penalty": format_penalty,  # v4新增
+        "format_penalty_weight": format_penalty_weight,  # v4新增
         "extracted_diagnosis": result.get("extracted_diagnosis", ""),
         "ground_truth": ground_truth,
         "patient_id": patient_id,

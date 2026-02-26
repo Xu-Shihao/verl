@@ -233,6 +233,13 @@ def extract_psy_metrics(reward_extra_infos_dict: dict, prefix: str = "training")
         "psy_diagnosis_accuracy",   # 诊断正确性
         "psy_icd_format_score",     # ICD 格式分数
         "psy_icd_exact_match",      # ICD 完全匹配
+        # SIG (Shapley Information Gain) 奖励指标
+        "psy_sig_reward",           # SIG总奖励
+        "psy_sig_num_facts",        # Fact数量
+        "psy_sig_num_turns",        # 问诊轮数
+        "psy_sig_total_sig",        # 总SIG值
+        "psy_sig_final_coverage",   # 最终覆盖率
+        "psy_sig_converged",        # Shapley是否收敛
     }
     
     # Find PSY-related keys that are in the allowed list

@@ -30,6 +30,8 @@ from verl.utils.device import is_cuda_available
 from verl.utils.import_utils import load_extern_type
 import torch
 
+# Rollout 进度追踪已内置在 sglang_rollout.py 中
+# 可通过环境变量 VERL_ROLLOUT_PROGRESS=0 禁用
 
 # 简化版本：直接使用原有的 RayPPOTrainer，不做复杂的集成
 # 我们将在 reward 函数中检查是否有可用的 tracker
@@ -70,7 +72,22 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
     printed_validation_example = [False]
     # Track whether we've printed the first training example
     printed_training_example = [False]
-    
+
+    # Initialize SIG calculator for token-level reward computation (lazy init)
+    _sig_calculator = [None]  # Use list to allow modification in nested function
+
+    def _get_sig_calculator():
+        """Lazy initialization of SIG calculator for token-level rewards."""
+        if _sig_calculator[0] is None:
+            try:
+                from psy_r1.verl.utils.sig_reward import SIGCalculator, SIGConfig
+                # Will be initialized with config when first needed
+                _sig_calculator[0] = "pending"  # Mark as pending initialization
+            except ImportError:
+                print("[SIG] Warning: Could not import SIG calculator for token-level rewards")
+                _sig_calculator[0] = None
+        return _sig_calculator[0]
+
     # Rollout statistics tracking
     rollout_stats = {
         'total_samples': 0,
@@ -130,7 +147,14 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
             "extracted_symptoms_count": [],
             "icd_exact_match": [],
             "icd_format_score": [],
-            "icd_f1_score": []
+            "icd_f1_score": [],
+            # SIG (Shapley Information Gain) 奖励指标
+            "sig_reward": [],           # SIG总奖励
+            "sig_num_facts": [],        # Fact数量
+            "sig_num_turns": [],        # 问诊轮数
+            "sig_total_sig": [],        # 总SIG值
+            "sig_final_coverage": [],   # 最终覆盖率
+            "sig_converged": [],        # Shapley是否收敛
         }
         
         # Batch statistics for this rollout
@@ -377,6 +401,16 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
                     psy_metrics["exact_match"].append(float(result.get("acc", False)))
                     psy_metrics["total_symptoms"].append(result.get("total_symptoms", 0))
                     psy_metrics["extracted_symptoms_count"].append(len(result.get("extracted_symptoms", [])))
+
+                # 收集 SIG (Shapley Information Gain) 奖励指标
+                if "sig_score" in result:
+                    psy_metrics["sig_reward"].append(result.get("sig_score", 0.0))
+                    sig_details = result.get("sig_details", {})
+                    psy_metrics["sig_num_facts"].append(sig_details.get("num_facts", 0))
+                    psy_metrics["sig_num_turns"].append(sig_details.get("num_turns", 0))
+                    psy_metrics["sig_total_sig"].append(sig_details.get("total_sig", 0.0))
+                    psy_metrics["sig_final_coverage"].append(sig_details.get("final_coverage", 0.0))
+                    psy_metrics["sig_converged"].append(float(sig_details.get("shapley_converged", False)))
             
             # Update batch statistics
             batch_total_score += score
@@ -676,26 +710,144 @@ def create_psy_reward_fn(is_validation=None, tokenizer=None, use_symptom_reward=
         
         # Convert to tensor format expected by VERL
         reward_tensor = torch.tensor(reward_scores, device=device, dtype=torch.float32)
-        
-        # Expand to token-level rewards (typically just put the reward at the last token)
+
+        # Expand to token-level rewards
         response_length = responses.shape[1]
         token_level_rewards = torch.zeros((batch_size, response_length), device=device, dtype=torch.float32)
-        
-        # Put the reward at the last valid token position
-        if "attention_mask" in data.batch:
-            attention_mask = data.batch["attention_mask"]
-            prompt_length = attention_mask.shape[1] - response_length
-            response_mask = attention_mask[:, prompt_length:]
-            
+
+        # Check if we should use token-level SIG rewards
+        use_token_level_sig = False
+        if rollout_reward_scores is not None:
+            # Check if any sample has token-level info
             for i in range(batch_size):
-                # Find the last valid token position
-                valid_positions = torch.where(response_mask[i] > 0)[0]
-                if len(valid_positions) > 0:
-                    last_pos = valid_positions[-1]
-                    token_level_rewards[i, last_pos] = reward_tensor[i]
+                try:
+                    sample_reward = rollout_reward_scores[i]
+                    if isinstance(sample_reward, dict) and "sig_token_level_info" in sample_reward:
+                        use_token_level_sig = True
+                        break
+                except Exception:
+                    pass
+
+        if use_token_level_sig and tokenizer:
+            # Use token-level SIG rewards (ProMed-style)
+            print(f"[SIG] Computing token-level rewards for batch_size={batch_size}")
+
+            for i in range(batch_size):
+                try:
+                    # Get token-level info from rollout reward
+                    sample_reward = rollout_reward_scores[i] if rollout_reward_scores is not None else None
+                    if not isinstance(sample_reward, dict) or "sig_token_level_info" not in sample_reward:
+                        # Fallback to scalar reward
+                        valid_len = valid_response_lengths[i].item()
+                        if valid_len > 0:
+                            token_level_rewards[i, valid_len - 1] = reward_tensor[i]
+                        continue
+
+                    token_info = sample_reward["sig_token_level_info"]
+                    per_turn_sig = token_info.get("per_turn_sig", [])
+                    diagnosis_correct = token_info.get("final_diagnosis_correct", False)
+
+                    # Decode complete text (prompt + response)
+                    # This is needed for ProMed-style token-level reward computation
+                    if "input_ids" in data.batch:
+                        # Use the full input_ids which includes prompt + response
+                        full_input_ids = data.batch["input_ids"][i]
+                        # Get valid tokens by filtering out padding
+                        if attention_mask is not None:
+                            valid_mask = attention_mask[i].bool()
+                            valid_input_ids = full_input_ids[valid_mask]
+                        else:
+                            valid_input_ids = full_input_ids
+                        completion_text = tokenizer.decode(valid_input_ids, skip_special_tokens=False)
+                    else:
+                        # Fallback: only use response
+                        valid_len = valid_response_lengths[i].item()
+                        valid_response_ids = responses[i][:valid_len]
+                        completion_text = tokenizer.decode(valid_response_ids, skip_special_tokens=False)
+
+                    # Import SIG calculator and compute token-level rewards
+                    from psy_r1.verl.utils.sig_reward import SIGCalculator, SIGConfig
+                    if _sig_calculator[0] == "pending":
+                        # Initialize with default config
+                        sig_config = SIGConfig()
+                        sig_config.use_token_level_reward = True
+                        _sig_calculator[0] = SIGCalculator(sig_config)
+
+                    if _sig_calculator[0] is not None and _sig_calculator[0] != "pending":
+                        token_reward_obj = _sig_calculator[0].compute_token_level_reward(
+                            completion_text=completion_text,
+                            tokenizer=tokenizer,
+                            per_turn_sig=per_turn_sig,
+                            diagnosis_correct=diagnosis_correct,
+                        )
+
+                        # Map token rewards to response tokens
+                        # token_reward_obj.token_rewards has rewards for all tokens in completion_text
+                        # We need to extract only the response part
+                        token_rewards_list = token_reward_obj.token_rewards
+
+                        # Calculate the offset: response tokens start after prompt tokens
+                        if prompts is not None:
+                            prompt_token_length = prompts[i].shape[0]
+                        else:
+                            # If no prompt, assume the last response_length tokens are response
+                            prompt_token_length = max(0, len(token_rewards_list) - response_length)
+
+                        # Extract response token rewards
+                        response_token_rewards = token_rewards_list[prompt_token_length:]
+
+                        # Map to response_length (truncate or pad)
+                        if len(response_token_rewards) >= response_length:
+                            # Take the first response_length tokens from response
+                            token_level_rewards[i, :] = torch.tensor(
+                                response_token_rewards[:response_length],
+                                device=device,
+                                dtype=torch.float32
+                            )
+                        else:
+                            # Pad with zeros at the end
+                            token_level_rewards[i, :len(response_token_rewards)] = torch.tensor(
+                                response_token_rewards,
+                                device=device,
+                                dtype=torch.float32
+                            )
+
+                        if is_validation is not None and i == 0:
+                            mode_str = "验证" if is_validation == "val" else "训练"
+                            valid_len = valid_response_lengths[i].item()
+                            print(f"[SIG {mode_str}] Token-level rewards computed:")
+                            print(f"  Response length: {valid_len}")
+                            print(f"  Completion tokens: {len(token_rewards_list)}")
+                            print(f"  Response token rewards: {len(response_token_rewards)}")
+                            print(f"  Mean token reward: {sum(response_token_rewards)/len(response_token_rewards):.4f}" if response_token_rewards else "  No response tokens")
+                            print(f"  Question boundaries: {len(token_reward_obj.question_boundaries)}")
+                            print(f"  Answer boundaries: {len(token_reward_obj.answer_boundaries)}")
+
+                except Exception as e:
+                    # Fallback to scalar reward if token-level computation fails
+                    print(f"[SIG] Error computing token-level reward for sample {i}: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    valid_len = valid_response_lengths[i].item()
+                    if valid_len > 0:
+                        token_level_rewards[i, valid_len - 1] = reward_tensor[i]
+
         else:
-            # Default: put reward at the last position
-            token_level_rewards[:, -1] = reward_tensor
+            # Default: put reward at the last valid token position (scalar reward mode)
+            if "attention_mask" in data.batch:
+                attention_mask = data.batch["attention_mask"]
+                prompt_length = attention_mask.shape[1] - response_length
+                response_mask = attention_mask[:, prompt_length:]
+
+                for i in range(batch_size):
+                    # Find the last valid token position
+                    valid_positions = torch.where(response_mask[i] > 0)[0]
+                    if len(valid_positions) > 0:
+                        last_pos = valid_positions[-1]
+                        token_level_rewards[i, last_pos] = reward_tensor[i]
+            else:
+                # Default: put reward at the last position
+                token_level_rewards[:, -1] = reward_tensor
         
         if return_dict:
             # 准备返回的字典，包含PSY相关的详细指标
