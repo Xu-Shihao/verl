@@ -37,23 +37,24 @@ install_requires = [
     "pylatexenc",
     "ray[default]>=2.41.0",
     "torchdata",
-    "tensordict>=0.8.0,<=0.9.1,!=0.9.0",
+    "tensordict>=0.8.0,<=0.10.0,!=0.9.0",
     "transformers",
     "wandb",
     "packaging>=20.0",
+    "tensorboard",
 ]
 
-TEST_REQUIRES = ["pytest", "pre-commit", "py-spy", "pytest-asyncio"]
+TEST_REQUIRES = ["pytest", "pre-commit", "py-spy", "pytest-asyncio", "pytest-rerunfailures"]
 PRIME_REQUIRES = ["pyext"]
 GEO_REQUIRES = ["mathruler", "torchvision", "qwen_vl_utils"]
 GPU_REQUIRES = ["liger-kernel", "flash-attn"]
 MATH_REQUIRES = ["math-verify"]  # Add math-verify as an optional dependency
-VLLM_REQUIRES = ["tensordict>=0.8.0,<=0.9.1,!=0.9.0", "vllm>=0.7.3,<=0.8.5"]
+VLLM_REQUIRES = ["tensordict>=0.8.0,<=0.10.0,!=0.9.0", "vllm>=0.8.5,<=0.12.0"]
+TRTLLM_REQUIRES = ["tensorrt-llm>=1.2.0rc6"]
 SGLANG_REQUIRES = [
-    "tensordict>=0.8.0,<=0.9.1,!=0.9.0",
-    "sglang[srt,openai]==0.4.6.post5",
-    "torch-memory-saver>=0.0.5",
-    "torch==2.6.0",
+    "tensordict>=0.8.0,<=0.10.0,!=0.9.0",
+    "sglang[srt,openai]==0.5.8",
+    "torch==2.9.1",
 ]
 TRL_REQUIRES = ["trl<=0.9.6"]
 MCORE_REQUIRES = ["mbridge"]
@@ -68,6 +69,7 @@ extras_require = {
     "sglang": SGLANG_REQUIRES,
     "trl": TRL_REQUIRES,
     "mcore": MCORE_REQUIRES,
+    "trtllm": TRTLLM_REQUIRES,
 }
 
 
@@ -88,7 +90,11 @@ setup(
     extras_require=extras_require,
     package_data={
         "": ["version/*"],
-        "verl": ["trainer/config/*.yaml"],
+        "verl": [
+            "trainer/config/*.yaml",
+            "trainer/config/*/*.yaml",
+            "experimental/*/config/*.yaml",
+        ],
     },
     include_package_data=True,
     long_description=long_description,

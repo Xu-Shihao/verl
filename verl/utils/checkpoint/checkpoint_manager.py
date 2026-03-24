@@ -22,17 +22,17 @@ import torch.distributed
 from omegaconf import DictConfig
 from transformers import PreTrainedTokenizer, ProcessorMixin
 
+from verl.trainer.config import CheckpointConfig
 from verl.utils.device import get_device_name, get_torch_device
 
 
 class BaseCheckpointManager:
     """
-    A checkpoint manager that saves and loads
+    A checkpoint manager that saves and loads the following states in a SPMD way:
     - model
     - optimizer
     - lr_scheduler
     - extra_states
-    in a SPMD way.
 
     We save
     - sharded model states and optimizer states
@@ -46,7 +46,7 @@ class BaseCheckpointManager:
         optimizer: torch.optim.Optimizer,
         lr_scheduler: torch.optim.lr_scheduler.LRScheduler = None,
         processing_class: PreTrainedTokenizer | ProcessorMixin = None,
-        checkpoint_config: DictConfig = None,
+        checkpoint_config: DictConfig | CheckpointConfig = None,
     ):
         self.checkpoint_config = checkpoint_config
         checkpoint_load_contents = checkpoint_config.get("load_contents", None) if checkpoint_config else None
@@ -141,6 +141,36 @@ class BaseCheckpointManager:
                 continue
             shutil.rmtree(abs_path, ignore_errors=True)
 
+    def ensure_checkpoint_capacity(self, max_ckpt_to_keep: int):
+        """
+        Remove old checkpoints to make room for a new one, keeping a safety buffer.
+
+        With max_ckpt_to_keep=1, this does nothing - we keep the existing checkpoint
+        until the new save completes successfully (handled by register_checkpoint).
+        For max_ckpt_to_keep >= 2, we keep (max_ckpt_to_keep - 1) checkpoints before save.
+        """
+        if not (max_ckpt_to_keep and isinstance(max_ckpt_to_keep, int) and max_ckpt_to_keep > 1):
+            return
+        if len(self.previous_saved_paths) >= max_ckpt_to_keep:
+            keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep + 1
+            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
+            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
+
+    def register_checkpoint(self, new_path: str, max_ckpt_to_keep: int):
+        """
+        Register a successfully saved checkpoint and enforce retention limit.
+
+        Adds the new checkpoint path to tracking and removes excess old
+        checkpoints beyond max_ckpt_to_keep.
+        """
+        self.previous_saved_paths.append(new_path)
+        if not (max_ckpt_to_keep and isinstance(max_ckpt_to_keep, int) and max_ckpt_to_keep > 0):
+            return
+        if len(self.previous_saved_paths) > max_ckpt_to_keep:
+            keep_start = len(self.previous_saved_paths) - max_ckpt_to_keep
+            self.remove_previous_save_local_path(self.previous_saved_paths[:keep_start])
+            self.previous_saved_paths = self.previous_saved_paths[keep_start:]
+
     @staticmethod
     def get_rng_state():
         rng_state = {
@@ -182,7 +212,8 @@ def find_latest_ckpt_path(path, directory_format="global_step_{}"):
 
     tracker_file = get_checkpoint_tracker_filename(path)
     if not os.path.exists(tracker_file):
-        print(f"Checkpoint tracker file does not exist: {tracker_file}")
+        if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+            print(f"Checkpoint tracker file does not exist: {tracker_file}")
         return None
 
     with open(tracker_file, "rb") as f:

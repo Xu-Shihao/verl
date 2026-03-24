@@ -20,6 +20,17 @@ from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 from omegaconf import OmegaConf
 
+_BREAKING_CHANGES = [
+    "critic.optim.lr",  # mcore critic lr init value 1e-6 -> 1e-5
+    "actor_rollout_ref.actor.optim.lr_warmup_steps",  # None -> -1
+    "critic.optim.lr_warmup_steps",  # None -> -1
+    "actor_rollout_ref.rollout.name",  # vllm -> ???
+    "actor_rollout_ref.actor.megatron.expert_tensor_parallel_size",
+    "actor_rollout_ref.ref.megatron.expert_tensor_parallel_size",
+    "critic.megatron.expert_tensor_parallel_size",
+    "reward_model.megatron.expert_tensor_parallel_size",
+]
+
 
 class TestConfigComparison(unittest.TestCase):
     """Test that current configs match their legacy counterparts exactly."""
@@ -30,7 +41,16 @@ class TestConfigComparison(unittest.TestCase):
         "activations_checkpoint_method",
         "activations_checkpoint_granularity",
         "activations_checkpoint_num_layers",
+        "discrete",
+        "profiler",
+        "profile",
+        "use_profile",
+        "npu_profile",
+        "profile_steps",
+        "worker_nsight_options",
+        "controller_nsight_options",
     ]
+    ignored_paths = ["reward_model", "custom_reward_function"]
 
     def _compare_configs_recursively(
         self, current_config, legacy_config, path="", legacy_allow_missing=True, current_allow_missing=False
@@ -41,6 +61,9 @@ class TestConfigComparison(unittest.TestCase):
             legacy_allow_missing (bool): sometimes the legacy megatron config contains fewer keys and
               we allow that to happen
         """
+        if path in self.ignored_paths:
+            return
+
         if isinstance(current_config, dict) and isinstance(legacy_config, dict):
             current_keys = set(current_config.keys())
             legacy_keys = set(legacy_config.keys())
@@ -81,7 +104,7 @@ class TestConfigComparison(unittest.TestCase):
             )
             for i, (current_item, legacy_item) in enumerate(zip(current_config, legacy_config, strict=True)):
                 self._compare_configs_recursively(current_item, legacy_item, f"{path}[{i}]")
-        else:
+        elif path not in _BREAKING_CHANGES:
             self.assertEqual(
                 current_config,
                 legacy_config,

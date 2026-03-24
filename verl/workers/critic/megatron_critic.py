@@ -74,7 +74,6 @@ class MegatronPPOCritic(BasePPOCritic):
                 "sequence_parallel": self.tf_config.sequence_parallel,
                 "DDP_impl": "local",
                 "layernorm_allreduce_bucket_threshold": 0,
-                "pipeline_model_parallel_split_rank": None,
                 "reduce_grads_use_alltoall": False,
             }
         )
@@ -84,14 +83,13 @@ class MegatronPPOCritic(BasePPOCritic):
         assert config.get("ulysses_sequence_parallel_size", 1) == 1
         if config.shuffle:
             assert config.data_loader_seed is not None, "If shuffle dataloader, seed must be manually set"
-        if config.megatron.tensor_model_parallel_size == 1:
-            print("[Warining] Because critic tp size == 1, set sp to False")
-            config.megatron.sequence_parallel = False
         self.config = config
 
     @GPUMemoryLogger("megatron critic", logger=logger)
     def compute_values(self, data: DataProto) -> DataProto:
-        data.to(get_device_id())
+        prev_modes = [m.training for m in self.critic_module]
+        for module in self.critic_module:
+            module.eval()
         responses = data.batch["responses"]
         attention_mask = data.batch["attention_mask"]
         use_dynamic_bsz = data.meta_info.get("use_dynamic_bsz", False)
@@ -133,15 +131,19 @@ class MegatronPPOCritic(BasePPOCritic):
             values = values.contiguous()
 
             # sync among pp ranks
+            values = values.to(get_device_id())
             torch.distributed.broadcast(
                 tensor=values,
                 src=mpu.get_pipeline_model_parallel_last_rank(),
                 group=mpu.get_pipeline_model_parallel_group(),
             )
+            values = values.to("cpu")
 
         # add empty cache after each compute
         get_torch_device().empty_cache()
 
+        for module, mode in zip(self.critic_module, prev_modes, strict=False):
+            module.train(mode)
         return values
 
     def make_minibatch_iterator(self, data: DataProto) -> Iterable[DataProto]:
@@ -164,20 +166,22 @@ class MegatronPPOCritic(BasePPOCritic):
         mini_batch_size=None,
     ):
         # broadcast from last pp rank to all other pp ranks
+        data.to(get_device_id())
         mini_batch = data
-        mini_batch.to(get_device_id())
         mini_batch.batch = mini_batch.batch.contiguous()
         broadcast_dict_tensor(
             mini_batch.batch,
             src=mpu.get_pipeline_model_parallel_last_rank(),
             group=mpu.get_pipeline_model_parallel_group(),
         )
+        mini_batch.to("cpu")
         # split into micro-batches
         mini_batch.batch["attention_mask"] = mini_batch.batch["attention_mask"].to(bool)
 
         indices = None
         if use_dynamic_bsz:
             assert max_token_len is not None, "max_token_len must be set when use_dynamic_bsz is True"
+            dp_group = mpu.get_data_parallel_group()
             vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
             if vpp_size is not None and vpp_size > 1:
                 microbatch_group_size_per_vp_stage = self.tf_config.microbatch_group_size_per_vp_stage
@@ -185,13 +189,16 @@ class MegatronPPOCritic(BasePPOCritic):
                     batch=mini_batch.batch,
                     num_batches_divided_by=microbatch_group_size_per_vp_stage,
                     max_token_len=max_token_len,
+                    dp_group=dp_group,
                 )
                 assert len(micro_batches) % self.tf_config.microbatch_group_size_per_vp_stage == 0, (
                     f"micro_batches {micro_batches} must be divisible by microbatch_group_size_per_vp_stage "
                     f"{microbatch_group_size_per_vp_stage} for megatron backend"
                 )
             else:
-                micro_batches, indices = rearrange_micro_batches(batch=mini_batch.batch, max_token_len=max_token_len)
+                micro_batches, indices = rearrange_micro_batches(
+                    batch=mini_batch.batch, max_token_len=max_token_len, dp_group=dp_group
+                )
             total_seqlen = max_token_len
         else:
             assert micro_batch_size is not None, (
@@ -242,6 +249,9 @@ class MegatronPPOCritic(BasePPOCritic):
 
         def forward_step(batch_iter, model):
             batch = next(batch_iter)
+            batch = batch.to(get_device_id())
+            batch = batch.contiguous()
+
             input_ids = batch["input_ids"]
             attention_mask = batch["attention_mask"]
             position_ids = batch["position_ids"]
@@ -254,7 +264,7 @@ class MegatronPPOCritic(BasePPOCritic):
                 input_ids,
                 attention_mask,
                 position_ids,
-                sequence_parallel=self.tf_config.sequence_parallel,
+                {},  # multi_modal_inputs
                 value_model=True,
             )
 
@@ -296,7 +306,6 @@ class MegatronPPOCritic(BasePPOCritic):
         metrics = {}
 
         for data in dataloader:
-            # data = data.batch.to(self.critic_module.device)
             self.critic_optimizer.zero_grad()
             # use use_contiguous_buffers_in_local_ddp and no overlap_dp_param_comm
             for chunk in self.critic_module:

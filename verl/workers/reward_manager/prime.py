@@ -15,19 +15,21 @@
 import asyncio
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
 
 import psutil
 import torch
 from transformers import PreTrainedTokenizer
 
 from verl import DataProto
+from verl.utils.ray_utils import get_event_loop
 from verl.utils.reward_score import default_compute_score
 from verl.workers.reward_manager import register
+from verl.workers.reward_manager.abstract import AbstractRewardManager
 
 
 async def single_compute_score(evaluation_func, completion, reference, task, task_extra_info, executor, timeout=300.0):
-    loop = asyncio.get_running_loop()
+    loop = get_event_loop()
     try:
         # Ensure process_completion is called properly
         future = loop.run_in_executor(executor, partial(evaluation_func, task, completion, reference, task_extra_info))
@@ -98,7 +100,7 @@ def run_reward_scoring(evaluation_func, completions, references, tasks, extra_in
 
 
 @register("prime")
-class PrimeRewardManager:
+class PrimeRewardManager(AbstractRewardManager):
     """
     The Reward Manager used in https://github.com/PRIME-RL/PRIME
     """
@@ -147,12 +149,13 @@ class PrimeRewardManager:
         data.batch["acc"] = torch.tensor(scores, dtype=torch.float32, device=prompt_ids.device)
         return scores
 
-    def __call__(self, data: DataProto, return_dict: bool = False):
+    def __call__(self, data: DataProto, return_dict: bool = False) -> torch.Tensor | dict[str, Any]:
         """We will expand this function gradually based on the available datasets"""
 
         # If there is rm score, we directly return rm score. Otherwise, we compute via rm_score_fn
-        if "rm_scores" in data.batch.keys():
-            return data.batch["rm_scores"]
+        reward_from_rm_scores = self._extract_reward_from_rm_scores(data, return_dict)
+        if reward_from_rm_scores is not None:
+            return reward_from_rm_scores
 
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
 

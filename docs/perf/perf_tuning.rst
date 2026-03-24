@@ -51,6 +51,12 @@ Below are key factors for tuning vLLM-based rollout. Before tuning, we recommend
   Carefully balance the trade-off between more replicas and higher memory usage.
   Our experiment in Sec. 8.4 of `HybridFlow paper <https://arxiv.org/pdf/2409.19256v2>`_ evaluate this trade-off.
 
+- Balance performance and memory using ``cudagraph_capture_sizes``.
+  If ``cudagraph_capture_sizes`` is set, vLLM will try to capture the model execution graph for different batch sizes.
+  Since cudagraph memory can not be offloaded to cpu, The memory stay in gpu when update actor is running. 
+  Using smaller batch sizes can avoid OOM but slightly reduce throughput.
+  Must to set ``enforce_eager=False`` to use ``cudagraph_capture_sizes``.
+
 More tuning details such as dealing with Preemption and Chunked-prefill
 can be found in `vLLM official tuning guide <https://docs.vllm.ai/en/latest/performance/optimization.html>`_ 
 
@@ -161,21 +167,21 @@ We support different model utilize different ulysses_sequence_parallel_size size
 
 To train long sequence (>32k), users may need to decrease the ``*micro_batch_size_per_gpu`` and ``*max_token_len_per_gpu`` to avoid OOM.
 
-LigerKernel for SFT
-----------------------
+LigerKernel for training performance
+--------------------------------------
 
-LigerKernel is a high-performance kernel for Supervised Fine-Tuning (SFT) that can improve training efficiency. To enable LigerKernel in your SFT training:
+LigerKernel provides fused Triton kernels (RMSNorm, SwiGLU, RoPE) that can improve training throughput. It works with both SFT and RL (PPO/GRPO) training, including vision-language models.
 
-1. Install liger-kernel via ``pip3 install liger-kernel``. In your SFT configuration file (e.g., ``verl/trainer/config/sft_trainer.yaml``), set the ``use_liger`` parameter:
+1. Install liger-kernel via ``pip3 install liger-kernel``. Set ``use_liger`` in your configuration:
 
    .. code-block:: yaml
 
       model:
-        use_liger: True  # Enable LigerKernel for SFT
+        use_liger: True  # Enable LigerKernel
 
-2. The default value is ``False``. Enable it only when you want to use LigerKernel's optimizations.
+2. The default value is ``False``. When enabled, verl applies Liger's fused RMSNorm, SwiGLU, and RoPE kernels to the model. The ``fused_linear_cross_entropy`` optimization is disabled because verl computes log-probabilities via its own path.
 
-3. LigerKernel is particularly useful for improving training performance in SFT scenarios.
+3. ``use_liger`` is compatible with ``use_fused_kernels`` — they operate at different levels (Liger optimizes model internals, fused kernels optimize the output head). Using both together gives the best speed-memory tradeoff.
 
 Forward prefetch in FSDP training backend
 ----------------------

@@ -31,12 +31,12 @@ permissions:
   contents: read
 
 env:
-  IMAGE: "your vemlp image" # e.g. "verl-ci-cn-beijing.cr.volces.com/verlai/verl:app-verl0.4-vllm0.8.5-mcore0.12.2"
+  IMAGE: "your vemlp image" # e.g. "verl-ci-cn-beijing.cr.volces.com/verlai/verl:sgl059.dev2"
   DYNAMIC_RUNNER_URL: "https://sd10g3clalm04ug7alq90.apigateway-cn-beijing.volceapi.com/runner" # public veFaas api
 
 jobs:
   setup:
-    if: github.repository_owner == 'volcengine'
+    if: github.repository_owner == 'verl-project'
     runs-on: ubuntu-latest
     outputs:
       runner-label: ${{ steps.create-runner.outputs.runner-label }}
@@ -67,3 +67,7 @@ jobs:
           mode: "destroy"
           faas-url: "${{ env.DYNAMIC_RUNNER_URL }}"
           task-id: "${{ needs.setup.outputs.task-id }}"
+```
+
+### Model and Dataset
+To avoid CI relies on network, we pre-download dataset on a NFS on the CI machine. The path for models are \${HOME}/models and the path for dataset is \${HOME}/models/hf_data.

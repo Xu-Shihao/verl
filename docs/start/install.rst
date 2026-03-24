@@ -4,8 +4,8 @@ Installation
 Requirements
 ------------
 
-- **Python**: Version >= 3.9
-- **CUDA**: Version >= 12.1
+- **Python**: Version >= 3.10
+- **CUDA**: Version >= 12.8
 
 verl supports various backends. Currently, the following configurations are available:
 
@@ -19,7 +19,7 @@ Choices of Backend Engines
 
 We recommend using **FSDP** backend to investigate, research and prototype different models, datasets and RL algorithms. The guide for using FSDP backend can be found in :doc:`FSDP Workers<../workers/fsdp_workers>`.
 
-For users who pursue better scalability, we recommend using **Megatron-LM** backend. Currently, we support `Megatron-LM v0.12.2 <https://github.com/NVIDIA/Megatron-LM/tree/core_v0.12.2>`_. The guide for using Megatron-LM backend can be found in :doc:`Megatron-LM Workers<../workers/megatron_workers>`.
+For users who pursue better scalability, we recommend using **Megatron-LM** backend. Currently, we support `Megatron-LM v0.13.1 <https://github.com/NVIDIA/Megatron-LM/tree/core_v0.13.1>`_. The guide for using Megatron-LM backend can be found in :doc:`Megatron-LM Workers<../workers/megatron_workers>`.
 
 
 2. Inference:
@@ -33,62 +33,37 @@ For huggingface TGI integration, it is usually used for debugging and single GPU
 Install from docker image
 -------------------------
 
-We provide pre-built Docker images for quick setup. And from this version,
-we utilize a new image release hierarchy for productivity and stability.
-
-The image types are divided into three large categories:
-
-- **Base Image**: Without inference and training frameworks, only basic dependencies are installed.
-  Can directly install vllm or SGLang on top of it, without need of reinstall torch or CUDA.
-- **Application Image**: Stable version with inference and training frameworks installed.
-- **Community Image**: Unstable version with the latest frameworks and features.
-
-The first two types of images are hosted on dockerhub `verlai/verl <https://hub.docker.com/r/verlai/verl>`_ repository, while the preview images are hosted on community repository.
-
-.. note::
-
-    The image versions are mapped with verl releases, for example, image with tag ``verl0.4`` is built for verl release ``v0.4.x``.
+Start from v0.6.0, we use vllm and sglang release image as our base image.
 
 Base Image
 ::::::::::
 
-The stable base image is ``verlai/verl:base-verl0.4-cu124-cudnn9.8-torch2.6-fa2.7.4``. The installed package versions can be found from tags, and the Dockerfile can be found in ``docker/verl[version]-[packages]/Dockerfile.base``.
-
-The base images for preview are ``verlai/verl:base-verl0.5-cu126-cudnn9.8-torch2.7.1-fa2.8.0` and ``verlai/verl:base-verl0.5-preview-cu128-cudnn9.8-torch2.7.1-fa2.8.0`` with different CUDA versions. From verl0.5, images are built with `Deep-EP <https://github.com/deepseek-ai/DeepEP>`_ for efficient EP communication.
-
-The update of base image is not frequent, and the app image can be built on top of it without reinstalling base packages.
+- vLLM: https://hub.docker.com/r/vllm/vllm-openai
+- SGLang: https://hub.docker.com/r/lmsysorg/sglang
 
 Application Image
 :::::::::::::::::
 
-From this version, we divide images built for vLLM and SGLang as the divergence of dependent packages like FlashInfer.
+Upon base image, the following packages are added:
 
-There are four types of application images available:
+- flash_attn
+- Megatron-LM
+- Apex
+- TransformerEngine
+- DeepEP
 
-- **vLLM with FSDP and Megatron**: ``verlai/verl:app-verl0.4-vllm0.8.5-mcore0.12.2-te2.2``, with Deep-EP support: ``verlai/verl:app-verl0.4-vllm0.8.5-mcore0.12.2-te2.2-deepep``.
-- **SGLang with FSDP and Megatron**: ``verlai/verl:app-verl0.4-sglang0.4.6.post5-vllm0.8.5-mcore0.12.2-te2.2`` (need vLLM support, but can have some package conflicts), with Deep-EP support: ``verlai/verl:app-verl0.4-sglang0.4.6.post5-vllm0.8.5-mcore0.12.2-te2.2-deepep``.
-- **Preview version of SGLang with FSDP and Megatron, CUDA 12.6**: ``verlai/verl:app-verl0.5-sglang0.4.8-mcore0.12.2-te2.2``
-- **Preview version of SGLang with FSDP and Megatron, CUDA 12.8**: ``verlai/verl:app-preview-verl0.5-sglang0.4.8-mcore0.12.2-te2.2``
+Latest docker file:
 
-The latest vLLM support is coming soon.
+- `Dockerfile.stable.vllm <https://github.com/volcengine/verl/blob/main/docker/Dockerfile.stable.vllm>`_
+- `Dockerfile.stable.sglang <https://github.com/volcengine/verl/blob/main/docker/Dockerfile.stable.sglang>`_
 
-Docker images with Megatron backends are runnable with large language model like ``Qwen/Qwen3-235B-A22B``, ``deepseek-ai/DeepSeek-V3-0324`` post-training. Refer to the :doc:`Large Language Model Post-Training documentation<../perf/dpsk>` for more details.
+All pre-built images are available in dockerhub: `verlai/verl <https://hub.docker.com/r/verlai/verl>`_. For example, ``verlai/verl:sgl055.latest``, ``verlai/verl:vllm011.latest``.
 
-Application images can be updated frequently, and the Dockerfile can be found in ``docker/verl[version]-[packages]/Dockerfile.app.[frameworks]``. Based on the base image, it is easy to build your own application image with the desired inference and training frameworks.
+You can find the latest images used for development and ci in our github workflows:
 
-Community Image
-:::::::::::::::
+- `.github/workflows/vllm.yml <https://github.com/volcengine/verl/blob/main/.github/workflows/vllm.yml>`_
+- `.github/workflows/sgl.yml <https://github.com/volcengine/verl/blob/main/.github/workflows/sgl.yml>`_
 
-Community images are provided by the community, including the latest versions of vLLM and SGLang, and may include experimental features or configurations. And also works for other hardwares or platforms like AMD GPUs with ROCM or AWS EFA and Sagemaker.
-
-For latest vLLM with FSDP, please refer to `hiyouga/verl <https://hub.docker.com/r/hiyouga/verl>`_ repository and the latest version is ``hiyouga/verl:ngc-th2.6.0-cu126-vllm0.8.4-flashinfer0.2.2-cxx11abi0``.
-
-For latest SGLang with FSDP, please refer to `ocss884/verl-sglang <https://hub.docker.com/r/ocss884/verl-sglang>`_ repository and the latest version is ``ocss884/verl-sglang:ngc-th2.6.0-cu126-sglang0.4.6.post5`` which is provided by SGLang RL Group.
-
-See files under ``docker/`` for NGC-based image or if you want to build your own.
-
-Note that For aws instances with EFA net interface (Sagemaker AI Pod),
-you need to install EFA driver as shown in ``docker/Dockerfile.extenstion.awsefa``
 
 Installation from Docker
 ::::::::::::::::::::::::
@@ -118,14 +93,18 @@ After pulling the desired Docker image and installing desired inference and trai
 
     # install the nightly version (recommended)
     git clone https://github.com/volcengine/verl && cd verl
-    pip3 install -e .[vllm]
-    pip3 install -e .[sglang]
+    pip3 install -e ".[vllm]"
+    pip3 install -e ".[sglang]"
 
 
 Install from custom environment
 ---------------------------------------------
 
 We recommend to use docker images for convenience. However, if your environment is not compatible with the docker image, you can also install verl in a python environment.
+
+.. note::
+
+    - Dockerfile provides more details than this installation instructions. You can find examples in each Dockerfile, for example `verl0.6-cu128-torch2.8.0-fa2.7.4 Dockerfile.base <https://github.com/volcengine/verl/blob/v0.6.0/docker/verl0.6-cu128-torch2.8.0-fa2.7.4/Dockerfile.base>`_ .
 
 
 Pre-requisites
@@ -137,27 +116,28 @@ so we put them in the :ref:`Post-installation` step.
 
 .. note::
 
-    The installation steps below are recommended configurations for the latest version of verl.
+    - The installation steps below are recommended configurations for the latest version of verl.
+
     If you are trying to customize your own environment, please ignore the strict constraints.
 
 We need to install the following pre-requisites:
 
-- **CUDA**: Version >= 12.4
-- **cuDNN**: Version >= 9.8.0
+- **CUDA**: Version >= 12.8
+- **cuDNN**: Version >= 9.10.0
 - **Apex**
 
-CUDA above 12.4 is recommended to use as the docker image,
+CUDA above 12.8 is recommended to use as the docker image,
 please refer to `NVIDIA's official website <https://developer.nvidia.com/cuda-toolkit-archive>`_ for other version of CUDA.
 
 .. code:: bash
 
     # change directory to anywher you like, in verl source code directory is not recommended
-    wget https://developer.download.nvidia.com/compute/cuda/12.4.1/local_installers/cuda-repo-ubuntu2204-12-4-local_12.4.1-550.54.15-1_amd64.deb
-    dpkg -i cuda-repo-ubuntu2204-12-4-local_12.4.1-550.54.15-1_amd64.deb
-    cp /var/cuda-repo-ubuntu2204-12-4-local/cuda-*-keyring.gpg /usr/share/keyrings/
+    wget https://developer.download.nvidia.com/compute/cuda/12.8.1/local_installers/cuda-repo-ubuntu2204-12-8-local_12.8.1-570.124.06-1_amd64.deb
+    dpkg -i cuda-repo-ubuntu2204-12-8-local_12.8.1-570.124.06-1_amd64.deb
+    cp /var/cuda-repo-ubuntu2204-12-8-local/cuda-*-keyring.gpg /usr/share/keyrings/
     apt-get update
-    apt-get -y install cuda-toolkit-12-4
-    update-alternatives --set cuda /usr/local/cuda-12.4
+    apt-get -y install cuda-toolkit-12-8
+    update-alternatives --set cuda /usr/local/cuda-12-8
 
 
 cuDNN can be installed via the following command,
@@ -166,24 +146,11 @@ please refer to `NVIDIA's official website <https://developer.nvidia.com/rdp/cud
 .. code:: bash
 
     # change directory to anywher you like, in verl source code directory is not recommended
-    wget https://developer.download.nvidia.com/compute/cudnn/9.8.0/local_installers/cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb
-    dpkg -i cudnn-local-repo-ubuntu2204-9.8.0_1.0-1_amd64.deb
-    cp /var/cudnn-local-repo-ubuntu2204-9.8.0/cudnn-*-keyring.gpg /usr/share/keyrings/
+    wget https://developer.download.nvidia.com/compute/cudnn/9.10.2/local_installers/cudnn-local-repo-ubuntu2204-9.10.2_1.0-1_amd64.deb
+    dpkg -i cudnn-local-repo-ubuntu2204-9.10.2_1.0-1_amd64.deb
+    cp /var/cudnn-local-repo-ubuntu2204-9.10.2/cudnn-*-keyring.gpg /usr/share/keyrings/
     apt-get update
     apt-get -y install cudnn-cuda-12
-
-NVIDIA Apex is required for Megatron-LM and FSDP training.
-You can install it via the following command, but notice that this steps can take a very long time.
-It is recommended to set the ``MAX_JOBS`` environment variable to accelerate the installation process,
-but do not set it too large, otherwise the memory will be overloaded and your machines may hang.
-
-.. code:: bash
-
-    # change directory to anywher you like, in verl source code directory is not recommended
-    git clone https://github.com/NVIDIA/apex.git && \
-    cd apex && \
-    MAX_JOB=32 pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" ./
-
 
 Install dependencies
 ::::::::::::::::::::
@@ -203,7 +170,7 @@ Install dependencies
 
 .. code:: bash
 
-   conda create -n verl python==3.10
+   conda create -n verl python==3.12
    conda activate verl
 
 
@@ -220,6 +187,17 @@ Install dependencies
 
 If you encounter errors in this step, please check the script and manually follow the steps in the script.
 
+[Optional] NVIDIA Apex is recommended for Megatron-LM training, but it's not needed if you only use FSDP backend.
+You can install it via the following command, but notice that this steps can take a very long time.
+It is recommended to set the ``MAX_JOBS`` environment variable to accelerate the installation process,
+but do not set it too large, otherwise the memory will be overloaded and your machines may hang.
+
+.. code:: bash
+
+    # change directory to anywher you like, in verl source code directory is not recommended
+    git clone https://github.com/NVIDIA/apex.git && \
+    cd apex && \
+    MAX_JOB=32 pip install -v --disable-pip-version-check --no-cache-dir --no-build-isolation --config-settings "--build-option=--cpp_ext" --config-settings "--build-option=--cuda_ext" ./
 
 Install verl
 ::::::::::::

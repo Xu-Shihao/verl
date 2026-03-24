@@ -5,7 +5,7 @@ export CUDA_DEVICE_MAX_CONNECTIONS=1 # For megatron communication/computation ov
 HF_MODEL_PATH=Qwen/Qwen2.5-VL-7B-Instruct
 DIST_CKPT_PATH=${DIST_CKPT_PATH}
 
-# convert HF model to meagatron format offlinely
+# convert HF model to megatron format offlinely
 # python scripts/converter_hf_to_mcore.py --hf_model_path $HF_MODEL_PATH --output_path $DIST_CKPT_PATH
 
 
@@ -62,7 +62,7 @@ python3 -m verl.trainer.main_ppo --config-path=config \
     actor_rollout_ref.rollout.log_prob_use_dynamic_bsz=True \
     actor_rollout_ref.rollout.log_prob_max_token_len_per_gpu=20480 \
     actor_rollout_ref.rollout.name=$ENGINE \
-    actor_rollout_ref.rollout.engine_kwargs.vllm.disable_mm_preprocessor_cache=True \
+    +actor_rollout_ref.rollout.engine_kwargs.vllm.disable_mm_preprocessor_cache=True \
     actor_rollout_ref.rollout.gpu_memory_utilization=0.8 \
     actor_rollout_ref.rollout.n=5 \
     actor_rollout_ref.ref.log_prob_micro_batch_size_per_gpu=20 \

@@ -63,6 +63,17 @@ Image and video should be processed before returning. For example, if you are us
 
 .. code-block:: python
 
+    async def create(self, ...) -> tuple[str, ToolResponse]:
+        ...
+        from verl.utils.dataset.vision_utils import process_image, process_video
+
+        img1 = process_image(img1)
+        video1 = process_video(video1)
+
+        # due to the (image | video) key is ("image" | "video") instead of ("images" | "videos") in vllm, we need to use ("image" | "video") to specify list of images/videos
+        # link: https://github.com/vllm-project/vllm/blob/3c545c0c3b98ee642373a308197d750d0e449403/vllm/multimodal/parse.py#L205
+        return instance_id, ToolResponse(image=[img1, ...], video=[video1, ...], text="...")
+
     async def execute(self, ...) -> Tuple[str | Dict[str, Any], float, dict]:
         ...
         from verl.utils.dataset.vision_utils import process_image, process_video
@@ -72,7 +83,7 @@ Image and video should be processed before returning. For example, if you are us
 
         # due to the (image | video) key is ("image" | "video") instead of ("images" | "videos") in vllm, we need to use ("image" | "video") to specify list of images/videos
         # link: https://github.com/vllm-project/vllm/blob/3c545c0c3b98ee642373a308197d750d0e449403/vllm/multimodal/parse.py#L205
-        return {"image": [img1, ...], "video": [video1, ...], "text": "..."}, 0, {}
+        return ToolResponse(image=[img1, ...], video=[video1, ...], text="..."), 0, {}
 
 remeber to set ``return_multi_modal_inputs: False`` in your dataset config in order to process the multi-modal inputs in the rollout correctly.
 Refer to the `Handling Multi-Modal Inputs in Datasets`_ section for more details.
@@ -285,7 +296,7 @@ This method works well for Qwen3 series. However, Qwen/QwQ-32B currently has a b
 .. code-block:: bash
 
     pip install huggingface_hub
-    huggingface-cli download Qwen/QwQ-32B --revision refs/pr/81
+    hf download Qwen/QwQ-32B --revision refs/pr/81
 
 .. _fix: https://huggingface.co/Qwen/QwQ-32B/discussions/81
 
