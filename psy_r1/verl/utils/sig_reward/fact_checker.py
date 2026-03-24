@@ -295,6 +295,8 @@ class FactChecker:
         This matrix has shape (num_turns, num_facts) where each entry
         indicates whether fact i is covered by understanding t.
 
+        Optimized: Uses asyncio.gather for parallel LLM calls (aligned with ProMed).
+
         Args:
             understandings: List of doctor understandings (including initial)
             facts: FactSet containing all atomic facts
@@ -311,31 +313,39 @@ class FactChecker:
         # First row (initial understanding) is all False
         # since doctor knows nothing at the start
 
-        # Check facts for each understanding
+        # Collect tasks for parallel execution (skip initial understanding)
+        tasks = []
+        task_indices = []
         for t, understanding in enumerate(understandings):
             if t == 0 and understanding.turn_index == -1:
                 # Initial state - no facts covered
                 continue
-
-            # Batch check all facts
-            coverage_dict = await self.check_facts_batch(
+            # Create async task for batch fact checking
+            task = self.check_facts_batch(
                 understanding.understanding_text,
                 facts.facts,
                 llm_client
             )
+            tasks.append(task)
+            task_indices.append(t)
 
-            # Fill matrix row
-            for i, fact in enumerate(facts.facts):
-                coverage_matrix[t, i] = coverage_dict.get(fact.id, False)
+        # Execute all tasks in parallel using asyncio.gather (aligned with ProMed's Pool approach)
+        if tasks:
+            results = await asyncio.gather(*tasks)
 
-            # Store in understanding object
-            understanding.fact_coverage = coverage_dict
-            understanding.coverage_vector = coverage_matrix[t].copy()
+            # Fill matrix with results
+            for t, coverage_dict in zip(task_indices, results):
+                for i, fact in enumerate(facts.facts):
+                    coverage_matrix[t, i] = coverage_dict.get(fact.id, False)
 
-            if self.config.log_sig_details:
-                covered_count = np.sum(coverage_matrix[t])
-                print(f"[SIG_FACTCHECK] Turn {understanding.turn_index}: "
-                      f"{covered_count}/{num_facts} facts covered")
+                # Store in understanding object
+                understandings[t].fact_coverage = coverage_dict
+                understandings[t].coverage_vector = coverage_matrix[t].copy()
+
+                if self.config.log_sig_details:
+                    covered_count = np.sum(coverage_matrix[t])
+                    print(f"[SIG_FACTCHECK] Turn {understandings[t].turn_index}: "
+                          f"{covered_count}/{num_facts} facts covered")
 
         return coverage_matrix
 

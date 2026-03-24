@@ -15,6 +15,10 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
 set -x
 
+# 确保不连接远程Ray集群
+unset RAY_ADDRESS
+export RAY_DISABLE_IMPORT_WARNING=1
+
 # 日志路径
 LOG_DIR="/tcci_mnt/shihao/project/verl/psy_r1/logs"
 mkdir -p $LOG_DIR
@@ -26,15 +30,15 @@ HOME="/tcci_mnt/shihao/project/verl"
 # ============================================================
 # 模型配置 (请根据实际情况修改)
 # ============================================================
-MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6"
-MODEL_BASE_NAME="qwen3-8B-sft_v7"
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v3/qwen3-8B_lora-sft_lingxidiag-16k_mix_0319"
+MODEL_BASE_NAME="qwen3-8B-sft-mixed"
 NNODES=1
 
 # ============================================================
 # 项目配置
 # ============================================================
-project_name='SMHC_v8_mixed_RL'
-exp_name=grpo_${MODEL_BASE_NAME}_v8_mixed
+project_name='SMHC_v9_mixed_RL'
+exp_name=grpo_${MODEL_BASE_NAME}_v9_mixed
 
 # ============================================================
 # 算法配置 - GRPO
@@ -53,17 +57,17 @@ max_prompt_length=6144
 max_response_length=6144
 max_num_batched_tokens=13240
 
-# ============================================================
+
 # 训练配置
-# ============================================================
 train_prompt_bsz=128
 ppo_mini_batch_size=64
 n_resp_per_prompt=5
 n_gpus_per_node=8
 
-# 性能参数
+# 性能相关参数
 log_prob_micro_batch_size_per_gpu=4
 ppo_micro_batch_size_per_gpu=4
+offload=False
 
 # 采样参数
 temperature=1.0

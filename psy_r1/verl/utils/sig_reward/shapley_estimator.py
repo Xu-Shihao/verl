@@ -91,14 +91,17 @@ class ShapleyValueCache:
         self.cache_dir = os.path.expanduser(cache_dir)
         self._memory_cache: Dict[str, ShapleyValues] = {}
 
-    def _get_cache_key(self, patient_id: str, model_version: str) -> str:
-        """Generate cache key from patient_id and model version."""
-        return f"{patient_id}_{model_version}"
+    def _get_cache_key(self, patient_id: str, model_version: str, num_facts: int = 0, facts_hash: str = "") -> str:
+        """Generate cache key from patient_id, model version, and facts info."""
+        # 包含 facts 数量和 hash 以确保 Shapley 值与 facts 匹配
+        return f"{patient_id}_{model_version}_{num_facts}_{facts_hash}"
 
     def get(
         self,
         patient_id: str,
-        model_version: str = ""
+        model_version: str = "",
+        num_facts: int = 0,
+        facts_hash: str = ""
     ) -> Optional[ShapleyValues]:
         """
         Get cached Shapley values for a patient.
@@ -106,11 +109,13 @@ class ShapleyValueCache:
         Args:
             patient_id: Patient identifier
             model_version: Model version hash (for cache invalidation)
+            num_facts: Number of facts (for cache key matching)
+            facts_hash: Hash of fact IDs (for cache key matching)
 
         Returns:
             Cached ShapleyValues or None if not found
         """
-        cache_key = self._get_cache_key(patient_id, model_version)
+        cache_key = self._get_cache_key(patient_id, model_version, num_facts, facts_hash)
 
         # Check memory cache first
         if cache_key in self._memory_cache:
@@ -134,7 +139,9 @@ class ShapleyValueCache:
         self,
         patient_id: str,
         values: ShapleyValues,
-        model_version: str = ""
+        model_version: str = "",
+        num_facts: int = 0,
+        facts_hash: str = ""
     ):
         """
         Cache Shapley values.
@@ -143,8 +150,10 @@ class ShapleyValueCache:
             patient_id: Patient identifier
             values: ShapleyValues to cache
             model_version: Model version hash
+            num_facts: Number of facts (for cache key matching)
+            facts_hash: Hash of fact IDs (for cache key matching)
         """
-        cache_key = self._get_cache_key(patient_id, model_version)
+        cache_key = self._get_cache_key(patient_id, model_version, num_facts, facts_hash)
 
         # Store in memory
         self._memory_cache[cache_key] = values
@@ -197,6 +206,11 @@ class MonteCarloShapleyEstimator:
         self.config = config
         self._cache = ShapleyValueCache(config.cache_dir) if config.cache_shapley_values else None
 
+    def _compute_facts_hash(self, fact_set: FactSet) -> str:
+        """Compute hash of fact IDs to identify unique fact sets."""
+        fact_ids_str = ",".join(sorted([f.id for f in fact_set.facts]))
+        return hashlib.md5(fact_ids_str.encode('utf-8')).hexdigest()[:8]
+
     async def estimate_shapley_values(
         self,
         fact_set: FactSet,
@@ -228,13 +242,22 @@ class MonteCarloShapleyEstimator:
                 model_version=model_version
             )
 
+        # Compute facts hash for cache key
+        facts_hash = self._compute_facts_hash(fact_set)
+
         # Check cache
         if self._cache is not None:
-            cached = self._cache.get(patient_id, model_version)
+            cached = self._cache.get(patient_id, model_version, n, facts_hash)
             if cached is not None:
-                if self.config.log_sig_details:
-                    print(f"[SIG_SHAPLEY] Using cached values for patient {patient_id}")
-                return cached
+                # 验证缓存的 fact_ids 数量与当前 fact_set 匹配
+                if len(cached.fact_ids) == n:
+                    if self.config.log_sig_details:
+                        print(f"[SIG_SHAPLEY] Using cached values for patient {patient_id} (n={n})")
+                    return cached
+                else:
+                    if self.config.log_sig_details:
+                        print(f"[SIG_SHAPLEY] Cache mismatch for patient {patient_id}: "
+                              f"cached={len(cached.fact_ids)}, current={n}, recomputing")
 
         # Initialize Shapley values
         phi = np.zeros(n, dtype=np.float64)
@@ -316,7 +339,7 @@ class MonteCarloShapleyEstimator:
 
         # Cache result
         if self._cache is not None:
-            self._cache.set(patient_id, result, model_version)
+            self._cache.set(patient_id, result, model_version, n, facts_hash)
 
         if self.config.log_sig_details:
             print(f"[SIG_SHAPLEY] Completed: converged={converged}, "

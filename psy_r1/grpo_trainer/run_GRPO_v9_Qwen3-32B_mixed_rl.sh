@@ -26,15 +26,15 @@ HOME="/tcci_mnt/shihao/project/verl"
 # ============================================================
 # 模型配置 (请根据实际情况修改)
 # ============================================================
-MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6"
-MODEL_BASE_NAME="qwen3-8B-sft_v7"
-NNODES=1
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v3/qwen3-32B_lora-sft_lingxidiag-16k_mix_0319"
+MODEL_BASE_NAME="qwen3-32B-sft-mixed"
+NNODES=2
 
 # ============================================================
 # 项目配置
 # ============================================================
-project_name='SMHC_v8_mixed_RL'
-exp_name=grpo_${MODEL_BASE_NAME}_v8_mixed
+project_name='SMHC_v9_mixed_RL'
+exp_name=grpo_${MODEL_BASE_NAME}_v9_mixed
 
 # ============================================================
 # 算法配置 - GRPO
@@ -50,20 +50,19 @@ kl_loss_type=low_var_kl
 # 数据配置
 # ============================================================
 max_prompt_length=6144
-max_response_length=6144
-max_num_batched_tokens=13240
+max_response_length=4800
+max_num_batched_tokens=11300
 
-# ============================================================
 # 训练配置
-# ============================================================
 train_prompt_bsz=128
 ppo_mini_batch_size=64
 n_resp_per_prompt=5
 n_gpus_per_node=8
 
-# 性能参数
+# 性能相关参数
 log_prob_micro_batch_size_per_gpu=4
-ppo_micro_batch_size_per_gpu=4
+ppo_micro_batch_size_per_gpu=2
+offload=False
 
 # 采样参数
 temperature=1.0
@@ -72,7 +71,7 @@ top_k=-1
 entropy_coeff=0
 
 # ============================================================
-# 路径配置 - 使用 v8 数据
+# 路径配置 - 使用 v9 数据
 # ============================================================
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
 TRAIN_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/LingxiDiag-16K_kimi-k2-0905_train.parquet"

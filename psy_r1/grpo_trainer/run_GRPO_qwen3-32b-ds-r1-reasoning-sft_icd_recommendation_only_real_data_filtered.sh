@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# ============================================================
-# v8 GRPO脚本 - 混合RL训练 (binary + multiclass + recommendation)
-# 使用 SMHC_data_v8 数据集和 v8 混合奖励函数
-# ============================================================
+# GRPO脚本 - ICD代码推荐任务
 set -xeuo pipefail
+
+# # # 设置环境proxy
+# export http_proxy="http://172.31.22.23:15001/"
+# export https_proxy="http://172.31.22.23:15001/"
 
 # 设置WANDB
 wandb online
@@ -13,32 +14,32 @@ export WANDB_ENTITY="shihao-xu-ntu"
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 
+# 设置日志路径
 set -x
 
-# 日志路径
+# 创建日志路径
 LOG_DIR="/tcci_mnt/shihao/project/verl/psy_r1/logs"
 mkdir -p $LOG_DIR
 
+# 读取现在时间
 NOW=$(date +%Y%m%d_%H%M%S)
 
 HOME="/tcci_mnt/shihao/project/verl"
 
-# ============================================================
-# 模型配置 (请根据实际情况修改)
-# ============================================================
-MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6"
-MODEL_BASE_NAME="qwen3-8B-sft_v7"
-NNODES=1
+# 模型名称
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/grpo_qwen3-32B_sft_auxiliary_diagnosis_v7_lr1e-6_icd_recommendation"
+MODEL_BASE_NAME="qwen3-32B-sft_auxiliary_diagnosis_v7_lr1e-6_tp2_full_only-real-data_filtered"
+NNODES=2
 
-# ============================================================
 # 项目配置
-# ============================================================
-project_name='SMHC_v8_mixed_RL'
-exp_name=grpo_${MODEL_BASE_NAME}_v8_mixed
+project_name='SMHC_ICD_recommendation_RL'
+exp_name=grpo_${MODEL_BASE_NAME}_icd_recommendation
 
-# ============================================================
-# 算法配置 - GRPO
-# ============================================================
+# # 确保不连接远程Ray集群
+# unset RAY_ADDRESS
+# export RAY_DISABLE_IMPORT_WARNING=1
+
+# 算法配置 - GRPO标准配置
 adv_estimator=grpo
 use_kl_in_reward=False
 kl_coef=0.0
@@ -46,24 +47,22 @@ use_kl_loss=True
 kl_loss_coef=0.001
 kl_loss_type=low_var_kl
 
-# ============================================================
 # 数据配置
-# ============================================================
 max_prompt_length=6144
 max_response_length=6144
-max_num_batched_tokens=13240
+max_num_batched_tokens=12300
 
-# ============================================================
+
 # 训练配置
-# ============================================================
 train_prompt_bsz=128
 ppo_mini_batch_size=64
 n_resp_per_prompt=5
 n_gpus_per_node=8
 
-# 性能参数
+# 性能相关参数
 log_prob_micro_batch_size_per_gpu=4
-ppo_micro_batch_size_per_gpu=4
+ppo_micro_batch_size_per_gpu=2
+offload=False
 
 # 采样参数
 temperature=1.0
@@ -71,23 +70,25 @@ top_p=1.0
 top_k=-1
 entropy_coeff=0
 
-# ============================================================
-# 路径配置 - 使用 v8 数据
-# ============================================================
+# 路径配置
 CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/LingxiDiag-16K_kimi-k2-0905_train.parquet"
-VAL_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/LingxiDiag-16K_kimi-k2-0905_val.parquet"
+TRAIN_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/SMHC_Collected_train.parquet"
+VAL_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/SMHC_Collected_val.parquet"
 
+# ICD奖励参数 - 启用ICD奖励（关键配置）
+USE_ICD_REWARD=True
+USE_SYMPTOM_REWARD=False
+SYMPTOM_ALPHA=0.1
+
+# 创建检查点目录
 mkdir -p "${CKPTS_DIR}"
 
+# 切换到工作目录
 cd "${HOME}"
 
-# ============================================================
-# 启动 v8 GRPO 训练
-# 使用 main_ppo_v8 而非 main_ppo_psy
-# 奖励函数已内置在 v8 trainer 中，根据 data_source 自动分发
-# ============================================================
-HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_v8 \
+# 启动GRPO训练 (使用psy_r1模块，启用ICD奖励)
+# 注意：GRPO使用main_ppo_psy，但通过reward_model配置来启用ICD奖励
+HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     data.train_files="${TRAIN_FILE}" \
     data.val_files="${VAL_FILE}" \
     data.train_batch_size=${train_prompt_bsz} \
@@ -98,7 +99,7 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_v8 \
     actor_rollout_ref.model.path="${MODEL_PATH}" \
     actor_rollout_ref.model.use_remove_padding=True \
     actor_rollout_ref.model.enable_gradient_checkpointing=True \
-    actor_rollout_ref.actor.optim.lr=5e-7 \
+    actor_rollout_ref.actor.optim.lr=1e-6 \
     actor_rollout_ref.actor.ppo_mini_batch_size=${ppo_mini_batch_size} \
     actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=${ppo_micro_batch_size_per_gpu} \
     actor_rollout_ref.actor.use_kl_loss=${use_kl_loss} \
@@ -123,6 +124,10 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_v8 \
     algorithm.adv_estimator=${adv_estimator} \
     algorithm.use_kl_in_reward=${use_kl_in_reward} \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
+    reward_model.use_psy_reward=True \
+    +reward_model.use_icd_reward=${USE_ICD_REWARD} \
+    +reward_model.use_symptom_reward=${USE_SYMPTOM_REWARD} \
+    +reward_model.symptom_alpha=${SYMPTOM_ALPHA} \
     reward_model.show_training_examples=True \
     reward_model.show_val_examples=True \
     trainer.critic_warmup=0.1 \

@@ -187,6 +187,8 @@ class DoctorUnderstandingGenerator:
         This creates U_0, U_1, ..., U_T where U_t represents the
         understanding after turn t.
 
+        Optimized: Uses asyncio.gather for parallel LLM calls (aligned with ProMed).
+
         Args:
             full_dialogue: Complete dialogue history
             llm_client: Async LLM client
@@ -194,7 +196,7 @@ class DoctorUnderstandingGenerator:
         Returns:
             List of DoctorUnderstanding objects, one per turn
         """
-        understandings = []
+        import asyncio
 
         # Initial understanding (before any dialogue)
         initial = DoctorUnderstanding(
@@ -204,7 +206,6 @@ class DoctorUnderstandingGenerator:
             fact_coverage={},
             coverage_vector=None
         )
-        understandings.append(initial)
 
         # Identify turn boundaries (each doctor question is a turn)
         turn_boundaries = []
@@ -216,23 +217,34 @@ class DoctorUnderstandingGenerator:
             if msg.get('role') == 'assistant':
                 turn_boundaries.append(current_turn.copy())
 
-        # Generate understanding for each turn
-        for turn_idx, turn_messages in enumerate(turn_boundaries):
+        if not turn_boundaries:
+            return [initial]
+
+        # Prepare all histories for parallel generation
+        all_tasks = []
+        for turn_idx in range(len(turn_boundaries)):
             # Accumulate messages up to this turn
             history_up_to_turn = []
             for prev_turn in turn_boundaries[:turn_idx + 1]:
                 history_up_to_turn.extend(prev_turn)
 
-            understanding = await self.generate_understanding(
+            # Create async task for each turn
+            task = self.generate_understanding(
                 dialogue_history=history_up_to_turn,
                 turn_index=turn_idx,
                 llm_client=llm_client,
             )
-            understandings.append(understanding)
+            all_tasks.append(task)
+
+        # Execute all tasks in parallel using asyncio.gather (aligned with ProMed's Pool approach)
+        turn_understandings = await asyncio.gather(*all_tasks)
+
+        # Combine initial understanding with generated ones
+        understandings = [initial] + list(turn_understandings)
 
         if self.config.log_sig_details:
             print(f"[SIG_UNDERSTAND] Generated {len(understandings)} understandings "
-                  f"(1 initial + {len(turn_boundaries)} turns)")
+                  f"(1 initial + {len(turn_boundaries)} turns) [PARALLEL]")
 
         return understandings
 

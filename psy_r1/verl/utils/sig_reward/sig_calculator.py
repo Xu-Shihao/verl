@@ -454,6 +454,19 @@ class SIGCalculator:
         per_turn_sig = []
         phi = shapley_values.normalized_values
 
+        # 检查维度是否匹配
+        num_shapley_facts = len(phi)
+        num_coverage_facts = coverage_matrix.shape[1] if len(coverage_matrix.shape) > 1 else 0
+
+        if num_shapley_facts != num_coverage_facts:
+            print(f"[SIG] Warning: Dimension mismatch - shapley={num_shapley_facts}, coverage={num_coverage_facts}")
+            # 使用较小的维度，截断或填充
+            min_facts = min(num_shapley_facts, num_coverage_facts)
+            if min_facts == 0:
+                return [0.0] * (len(coverage_matrix) - 1)
+            phi = phi[:min_facts]
+            coverage_matrix = coverage_matrix[:, :min_facts]
+
         # Coverage matrix includes initial state at index 0
         for t in range(1, len(coverage_matrix)):
             coverage_prev = coverage_matrix[t - 1].astype(float)

@@ -3,8 +3,8 @@
 set -xeuo pipefail
 
 # # 设置环境proxy
-# export http_proxy="http://cloudml:gP1dY0uI0o@10.119.176.202:3128"
-# export https_proxy="http://cloudml:gP1dY0uI0o@10.119.176.202:3128"
+export http_proxy="http://172.31.22.23:15001/"
+export https_proxy="http://172.31.22.23:15001/"
 
 # 设置WANDB
 wandb online
@@ -27,8 +27,8 @@ NOW=$(date +%Y%m%d_%H%M%S)
 HOME="/tcci_mnt/shihao/project/verl"
 
 # 模型名称
-MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/qwen3-32B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6_0113"
-MODEL_BASE_NAME="qwen3-32B-sft_auxiliary_diagnosis_v7_-lr1e-6-_tp2_full_with-real-data"
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/grpo_qwen3-32B_sft_auxiliary_diagnosis_v7_lr1e-6_icd_recommendation"
+MODEL_BASE_NAME="qwen3-32B-sft_auxiliary_diagnosis_v7_lr1e-6_tp2_full_with-real-data"
 NNODES=2
 
 # 项目配置

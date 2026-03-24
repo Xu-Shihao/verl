@@ -2,9 +2,6 @@
 # GRPO脚本 - ICD代码推荐任务
 set -xeuo pipefail
 
-# 设置环境proxy
-export https_proxy=http://10.119.16.227:7890 http_proxy=http://10.119.16.227:7890 all_proxy=socks5://10.119.16.227:7890
-
 # 设置WANDB
 wandb online
 export WANDB_API_KEY=d8e131b9817bc59353326755d6db8b705a4d8d4d
@@ -17,17 +14,17 @@ export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 set -x
 
 # 创建日志路径
-LOG_DIR="/mnt/tcci/shihao/project/verl/psy_r1/logs"
+LOG_DIR="/tcci_mnt/shihao/project/verl/psy_r1/logs"
 mkdir -p $LOG_DIR
 
 # 读取现在时间
 NOW=$(date +%Y%m%d_%H%M%S)
 
-HOME="/mnt/tcci/shihao/project/verl"
+HOME="/tcci_mnt/shihao/project/verl"
 
 # 模型名称
-MODEL_PATH="/mnt/tcci/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6"
-MODEL_BASE_NAME="qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7-1_lr1e-6"
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v2/qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7_lr1e-6"
+MODEL_BASE_NAME="qwen3-8B_auxiliary_diagnosis_lora-sft_reasoning_kimi-k2-0905_v7-1_lr1e-6_only_real_data_filtered"
 NNODES=1
 
 # 项目配置
@@ -68,9 +65,9 @@ top_k=-1
 entropy_coeff=0
 
 # 路径配置
-CKPTS_DIR="/mnt/tcci/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
-TRAIN_FILE="$HOME/psy_r1/SMHC-real_data_v7/train.parquet"
-VAL_FILE="$HOME/psy_r1/SMHC-real_data_v7/val.parquet"
+CKPTS_DIR="/tcci_mnt/shihao/project/verl/checkpoints/${project_name}/${exp_name}"
+TRAIN_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/SMHC_Collected_train.parquet"
+VAL_FILE="/tcci_mnt/shihao/project/Lingxi_annotation_0210/src/rl/data/SMHC_Collected_val.parquet"
 
 # ICD奖励参数 - 启用ICD奖励（关键配置）
 USE_ICD_REWARD=True
@@ -135,5 +132,4 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_psy \
     trainer.total_epochs=20 \
     trainer.val_before_train=False \
     trainer.default_local_dir="${CKPTS_DIR}" \
-    ray_init.num_cpus=32 \
     $@ 2>&1 | tee $LOG_DIR/${exp_name}_$NOW.log
