@@ -30,8 +30,12 @@ HOME="/tcci_mnt/shihao/project/verl"
 # ============================================================
 # 模型配置 (请根据实际情况修改)
 # ============================================================
-MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v3/qwen3-8B_lora-sft_lingxidiag-16k_mix_0319"
-MODEL_BASE_NAME="qwen3-8B-sft-mixed"
+# MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v3/qwen3-8B_lora-sft_lingxidiag-16k_mix_0319"
+# MODEL_BASE_NAME="qwen3-8B-sft-mixed"
+# NNODES=1
+
+MODEL_PATH="/tcci_mnt/shihao/outputs/dataset_v3/qwen3-8B_lora-sft_lingxidiag-16k_mix_0325"
+MODEL_BASE_NAME="qwen3-8B-sft-mixed_0325"
 NNODES=1
 
 # ============================================================
