@@ -149,8 +149,16 @@ class TaskRunner:
         train_log_mode = "train" if show_train_examples else None
         val_log_mode = "val" if show_val_examples else None
 
-        reward_fn = create_v8_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer)
-        val_reward_fn = create_v8_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer)
+        # 任务级reward权重
+        task_reward_weights = {
+            "binary": float(config.reward_model.get("binary_reward_weight", 1.0)),
+            "multiclass": float(config.reward_model.get("multiclass_reward_weight", 1.0)),
+            "recommendation": float(config.reward_model.get("recommendation_reward_weight", 1.0)),
+        }
+        print(f"任务reward权重: {task_reward_weights}")
+
+        reward_fn = create_v8_reward_fn(is_validation=train_log_mode, tokenizer=tokenizer, task_reward_weights=task_reward_weights)
+        val_reward_fn = create_v8_reward_fn(is_validation=val_log_mode, tokenizer=tokenizer, task_reward_weights=task_reward_weights)
 
         print("v8 混合奖励: binary(抑郁/焦虑) + multiclass(4分类) + recommendation(ICD-10)")
         print("奖励公式: format_score * 0.2 + format_score * exact_match * 0.8")

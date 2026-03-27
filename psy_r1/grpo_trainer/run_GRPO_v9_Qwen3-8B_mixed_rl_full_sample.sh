@@ -73,6 +73,11 @@ offload=False
 temperature=1.0
 top_p=1.0
 top_k=-1
+
+# 任务级reward权重 (控制三个任务的正确性reward占比)
+binary_reward_weight=1.0
+multiclass_reward_weight=1.0
+recommendation_reward_weight=1.0
 entropy_coeff=0
 
 # ============================================================
@@ -129,6 +134,9 @@ HYDRA_FULL_ERROR=1 && python3 -m psy_r1.verl.trainer.main_ppo_v8 \
     algorithm.kl_ctrl.kl_coef=${kl_coef} \
     reward_model.show_training_examples=True \
     reward_model.show_val_examples=True \
+    +reward_model.binary_reward_weight=${binary_reward_weight} \
+    +reward_model.multiclass_reward_weight=${multiclass_reward_weight} \
+    +reward_model.recommendation_reward_weight=${recommendation_reward_weight} \
     trainer.critic_warmup=0.1 \
     trainer.logger='["console","wandb"]' \
     trainer.project_name="${project_name}" \

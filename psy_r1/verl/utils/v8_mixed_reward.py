@@ -194,17 +194,20 @@ def compute_score_v8(data_source, solution_str, ground_truth, extra_info=None, *
 # GRPO reward wrapper (批量接口, 用于 main_ppo_psy.py 风格的训练器)
 # ============================================================
 
-def create_v8_reward_fn(is_validation=None, tokenizer=None):
+def create_v8_reward_fn(is_validation=None, tokenizer=None, task_reward_weights=None):
     """
     创建 v8 混合RL的奖励函数 (GRPO批量接口)
 
     Args:
         is_validation: "val"=验证模式, "train"=训练模式, None=无日志
         tokenizer: 用于解码token的tokenizer
+        task_reward_weights: 任务级reward权重字典，如 {"binary": 1.0, "multiclass": 0.5, "recommendation": 1.5}
 
     Returns:
         reward function compatible with VERL RayPPOTrainer
     """
+    if task_reward_weights is None:
+        task_reward_weights = {"binary": 1.0, "multiclass": 1.0, "recommendation": 1.0}
 
     printed_first_example = [False]
 
@@ -281,6 +284,11 @@ def create_v8_reward_fn(is_validation=None, tokenizer=None):
                 score = result.get("score", 0.0) if isinstance(result, dict) else float(result)
                 is_correct = result.get("acc", False) if isinstance(result, dict) else False
                 format_ok = result.get("format_score", 0.0) > 0 if isinstance(result, dict) else False
+
+                # 应用任务级reward权重
+                task_type_for_weight = extra_info.get("task_type", "recommendation") if isinstance(extra_info, dict) else "recommendation"
+                weight = task_reward_weights.get(task_type_for_weight, 1.0)
+                score = score * weight
             except Exception as e:
                 if is_validation:
                     print(f"[v8 Reward Error] {e}")
