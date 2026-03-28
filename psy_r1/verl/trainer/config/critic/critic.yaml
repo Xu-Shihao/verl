@@ -16,6 +16,9 @@ optim:
   # Module path to import optimizer from
   optimizer_impl: torch.optim
 
+  # Learning rate
+  lr: 1e-5
+
   # Warmup steps ratio; total steps will be injected at runtime
   lr_warmup_steps_ratio: 0.0
 
@@ -24,6 +27,24 @@ optim:
 
   # Weight decay
   weight_decay: 0.01
+
+  # LR warmup steps
+  lr_warmup_steps: -1
+
+  # Betas for Adam optimizer
+  betas: [0.9, 0.999]
+
+  # Clip gradient
+  clip_grad: 1.0
+
+  # LR scheduler type: "constant" or "cosine"
+  lr_scheduler_type: constant
+
+  # Whether the LR schedule uses 0-indexed steps
+  zero_indexed_step: true
+
+  # Additional optimizer-specific keyword arguments
+  override_optimizer_config: null
 
 # model config for the critic
 model:
