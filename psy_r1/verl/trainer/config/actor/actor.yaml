@@ -98,6 +98,15 @@ checkpoint:
 # optimizer configs
 optim:
 
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPOptimizerConfig
+
+  # Optimizer class name (e.g., "AdamW", "AdamW8bit", "_AdamW")
+  optimizer: AdamW
+
+  # Module path to import optimizer from
+  optimizer_impl: torch.optim
+
   # Learning rate
   lr: 1e-6
 
@@ -109,3 +118,6 @@ optim:
 
   # Weight decay
   weight_decay: 0.01
+
+  # LR scheduler type: "constant" or "cosine"
+  lr_scheduler_type: constant

@@ -7,6 +7,15 @@ strategy: ???
 # optimizer configs
 optim:
 
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPOptimizerConfig
+
+  # Optimizer class name
+  optimizer: AdamW
+
+  # Module path to import optimizer from
+  optimizer_impl: torch.optim
+
   # Warmup steps ratio; total steps will be injected at runtime
   lr_warmup_steps_ratio: 0.0
 
