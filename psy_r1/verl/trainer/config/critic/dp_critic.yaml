@@ -45,6 +45,9 @@ model:
   # FSDP-specific config
   fsdp_config:
 
+    # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+    _target_: verl.workers.config.FSDPEngineConfig
+
     # Whether to offload model parameters to CPU
     param_offload: False
 

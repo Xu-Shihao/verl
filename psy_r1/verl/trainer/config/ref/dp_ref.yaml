@@ -10,6 +10,9 @@ defaults:
 # config for FSDP strategy
 fsdp_config:
 
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPEngineConfig
+
   # whether to offload parameters in FSDP
   param_offload: False
 

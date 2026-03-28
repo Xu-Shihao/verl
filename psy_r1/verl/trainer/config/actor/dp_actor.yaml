@@ -13,6 +13,9 @@ defaults:
   # load the reference default config, then apply the fields in the current yaml
   - _self_
 
+# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+_target_: verl.workers.config.FSDPActorConfig
+
 # TODO(haibin.lin): switch to fsdp2
 strategy: fsdp
 
@@ -46,6 +49,9 @@ optim:
 
 # configs for FSDP
 fsdp_config:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPEngineConfig
 
   # policy for wrapping the model
   wrap_policy:

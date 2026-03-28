@@ -29,6 +29,9 @@ model:
   # FSDP-specific config
   fsdp_config:
 
+    # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+    _target_: verl.workers.config.FSDPEngineConfig
+
     # Policy for wrapping layers with FSDP
     wrap_policy:
       # Minimum number of parameters to trigger wrapping
