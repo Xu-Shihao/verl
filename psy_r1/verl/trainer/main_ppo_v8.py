@@ -11,7 +11,6 @@ import socket
 import hydra
 import ray
 
-from verl.experimental.reward_loop import migrate_legacy_reward_impl
 from verl.trainer.main_ppo import TaskRunner as BaseTaskRunner, run_ppo
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.utils.device import auto_set_device
@@ -117,7 +116,9 @@ class PsyV8TaskRunner(BaseTaskRunner):
 @hydra.main(config_path="config", config_name="ppo_trainer_psy", version_base=None)
 def main(config):
     auto_set_device(config)
-    config = migrate_legacy_reward_impl(config)
+    # NOTE: migrate_legacy_reward_impl is NOT called because RayPPOTrainer
+    # still references config.reward_model in _validate_config() and elsewhere.
+    # The legacy_reward_impl.yaml provides reward_model with null/False defaults.
     # 使用自定义 TaskRunner 运行 PPO
     task_runner_class = ray.remote(num_cpus=1)(PsyV8TaskRunner)
     run_ppo(config, task_runner_class=task_runner_class)
