@@ -1,6 +1,9 @@
 # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
 _target_: verl.workers.config.RolloutConfig
 
+# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+_target_: verl.workers.config.RolloutConfig
+
 # actor_rollout_ref.rollout.name: hf/vllm/sglang. The default value will be removed in the future
 name: vllm
 
@@ -163,16 +166,6 @@ multi_turn:
 
   # Format of the multi-turn interaction. Options: hermes, llama3_json, ...
   format: hermes
-
-  # Dynamic sampling configuration to avoid bubble behavior from long trajectories.
-  # When enabled, more rollouts are started than needed, and only the first batch_size completed ones are used.
-  dynamic_sampling:
-    # Whether to enable dynamic sampling
-    enable: False
-    # Oversample ratio: 1.2 means start 20% more rollouts than batch_size
-    oversample_ratio: 1.2
-    # Timeout in seconds to wait for all rollouts to complete; after timeout, use whatever is done
-    timeout: null
 
 # support logging rollout prob for debugging purpose
 calculate_log_probs: False

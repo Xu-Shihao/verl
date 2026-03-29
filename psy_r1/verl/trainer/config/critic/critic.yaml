@@ -1,19 +1,20 @@
-# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-_target_: verl.workers.config.CriticConfig
-
 # Number of rollouts per update (mirrors actor rollout_n)
 rollout_n: ${oc.select:actor_rollout_ref.rollout.n,1}
 
 # fsdp or fsdp2 strategy used for critic model training
 strategy: ???
 
-# whether to enable the critic worker.
-# by default it is only enabled if advantage estimator is gae
-# set it to True manually if you always want to enable critic worker
-enable: null
-
 # optimizer configs
 optim:
+
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  _target_: verl.workers.config.FSDPOptimizerConfig
+
+  # Optimizer class name
+  optimizer: AdamW
+
+  # Module path to import optimizer from
+  optimizer_impl: torch.optim
 
   # Learning rate
   lr: 1e-5
@@ -27,9 +28,23 @@ optim:
   # Weight decay
   weight_decay: 0.01
 
-  # Prioritized. None, 0 or Negative values mean delegating to lr_warmup_steps_ratio.
+  # LR warmup steps
   lr_warmup_steps: -1
 
+  # Betas for Adam optimizer
+  betas: [0.9, 0.999]
+
+  # Clip gradient
+  clip_grad: 1.0
+
+  # LR scheduler type: "constant" or "cosine"
+  lr_scheduler_type: constant
+
+  # Whether the LR schedule uses 0-indexed steps
+  zero_indexed_step: true
+
+  # Additional optimizer-specific keyword arguments
+  override_optimizer_config: null
 
 # model config for the critic
 model:
@@ -73,9 +88,6 @@ ppo_epochs: ${oc.select:actor_rollout_ref.actor.ppo_epochs,1}
 # Shuffle training data across PPO epochs
 shuffle: ${oc.select:actor_rollout_ref.actor.shuffle,false}
 
-# The seed used to construct mini-batch
-data_loader_seed: 42
-
 # PPO value function clipping range
 cliprange_value: 0.5
 
@@ -85,9 +97,6 @@ loss_agg_mode: ${oc.select:actor_rollout_ref.actor.loss_agg_mode,token-mean}
 # checkpoint configs
 checkpoint:
 
-  # Target dataclass for this configuration
-  _target_: verl.trainer.config.CheckpointConfig
-
   # What to include in saved checkpoints
   # with 'hf_model' you can save whole model as hf format, now only use sharded model checkpoint to save space
   save_contents: ['model', 'optimizer', 'extra']
@@ -95,24 +104,15 @@ checkpoint:
   # What to include when loading checkpoints
   load_contents: ${.save_contents}
 
-  # Whether to save checkpoints asynchronously. Only effective for Megatron as of now.
-  async_save: False
-
-  # Mbridge config extension.
-  mbridge_config: {}
-
-# profile the critic model in `update_critic`
+# profiler configs
+# the corresponding dataclass is verl.utils.profiler.ProfilerConfig.
 profiler:
 
-  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
+  # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs in the entrypoint
   _target_: verl.utils.profiler.ProfilerConfig
 
-  # profiler tool, default same as profiler.tool in global config
-  # choices: nsys, npu, torch, torch_memory
-  tool: ${oc.select:global_profiler.tool,null}
-
-  # whether enable profile on Critic
-  enable: False
+  # True for each task has its own database, False for all tasks in one training step share one database.
+  discrete: False
 
   # Whether to profile all ranks.
   all_ranks: False
@@ -120,62 +120,5 @@ profiler:
   # The ranks that will be profiled. [] or [0,1,...]
   ranks: []
 
-  # profile results saving path
-  save_path: ${oc.select:global_profiler.save_path,null}
-
-  # specific tool config which only related to the role
-  tool_config:
-
-    # nsys tool config
-    nsys:
-
-      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-      _target_: verl.utils.profiler.config.NsightToolConfig
-    
-      # True for each task has its own database, False for all tasks in one training step share one database.
-      discrete: ${oc.select:global_profiler.global_tool_config.nsys.discrete}
-    
-    # npu config
-    npu:
-
-      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-      _target_: verl.utils.profiler.config.NPUToolConfig
-
-      # Contents to profile, can be empty
-      # options: npu, cpu, memory, shapes, module, stack
-      contents: []
-
-      # Collection level, optional values: level_none, level0, level1, level2.
-      level: "level0"
-
-      # Whether to automatically parse the data.
-      analysis: True
-
-      # True for each task has its own database, False for all tasks in one training step share one database.
-      discrete: False
-    
-    # torch profiler config
-    torch:
-
-      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-      _target_: verl.utils.profiler.config.TorchProfilerToolConfig
-
-      # Contents to profile, can be empty
-      # options: cuda, cpu, memory, shapes, stack
-      contents: []
-
-      # True for each task has its own database, False for all tasks in one training step share one database.
-      discrete: false
-
-    # torch memory profiler config
-    torch_memory:
-
-      # Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs
-      _target_: verl.utils.profiler.config.TorchMemoryToolConfig
-
-      # Maximum number of memory allocation entries to track
-      trace_alloc_max_entries: ${oc.select:global_profiler.global_tool_config.torch_memory.trace_alloc_max_entries,100000}
-
-      # Stack trace depth for memory allocations
-      stack_depth: ${oc.select:global_profiler.global_tool_config.torch_memory.stack_depth,32}
-      
+# Required when using verl.utils.omega_conf_to_dataclass to instantiate dataclass configs in the entrypoint
+_target_: verl.trainer.config.CriticConfig

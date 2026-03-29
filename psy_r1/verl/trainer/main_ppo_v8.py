@@ -63,9 +63,8 @@ class PsyV8TaskRunner(BaseTaskRunner):
         # --- v8 混合奖励函数 ---
         print("=== 初始化 v8 混合RL奖励函数 ===")
 
-        psy_cfg = config.get("psy", {})
-        show_train_examples = psy_cfg.get("show_training_examples", True)
-        show_val_examples = psy_cfg.get("show_val_examples", True)
+        show_train_examples = config.reward_model.get("show_training_examples", True)
+        show_val_examples = config.reward_model.get("show_val_examples", True)
 
         train_log_mode = "train" if show_train_examples else None
         val_log_mode = "val" if show_val_examples else None
