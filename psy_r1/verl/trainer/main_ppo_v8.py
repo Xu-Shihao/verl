@@ -12,7 +12,7 @@ import hydra
 import ray
 
 from verl.experimental.reward_loop import migrate_legacy_reward_impl
-from verl.trainer.main_ppo import TaskRunner as BaseTaskRunner, run_ppo, create_rl_dataset, create_rl_sampler
+from verl.trainer.main_ppo import TaskRunner as BaseTaskRunner, run_ppo
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 from verl.utils.device import auto_set_device
 
@@ -59,7 +59,7 @@ class PsyV8TaskRunner(BaseTaskRunner):
 
         resource_pool_manager = self.init_resource_pool_mgr(config)
 
-        from verl.utils.dataset.rl_dataset import collate_fn
+        from verl.utils.dataset.rl_dataset import RLHFDataset, collate_fn
 
         # --- v8 混合奖励函数 ---
         print("=== 初始化 v8 混合RL奖励函数 ===")
@@ -79,23 +79,21 @@ class PsyV8TaskRunner(BaseTaskRunner):
         print("=== v8 奖励函数初始化完成 ===")
 
         # --- 数据集 ---
-        train_dataset = create_rl_dataset(
-            config.data.train_files,
-            config.data,
-            tokenizer,
-            processor,
-            is_train=True,
-            max_samples=config.data.get("train_max_samples", -1),
+        train_dataset = RLHFDataset(
+            data_files=config.data.train_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            config=config.data,
         )
-        val_dataset = create_rl_dataset(
-            config.data.val_files,
-            config.data,
-            tokenizer,
-            processor,
-            is_train=False,
-            max_samples=config.data.get("val_max_samples", -1),
+        val_dataset = RLHFDataset(
+            data_files=config.data.val_files,
+            tokenizer=tokenizer,
+            processor=processor,
+            config=config.data,
         )
-        train_sampler = create_rl_sampler(config.data, train_dataset)
+
+        from torchdata.stateful_dataloader.sampler import RandomSampler
+        train_sampler = RandomSampler(train_dataset)
 
         # --- 初始化 trainer (注入 v8 reward) ---
         trainer = RayPPOTrainer(
