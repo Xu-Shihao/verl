@@ -14,7 +14,6 @@ import ray
 from verl.experimental.reward_loop import migrate_legacy_reward_impl
 from verl.trainer.main_ppo import TaskRunner as BaseTaskRunner, run_ppo, create_rl_dataset, create_rl_sampler
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
-from verl.utils.config import validate_config
 from verl.utils.device import auto_set_device
 
 # 导入 v8 混合奖励函数
@@ -43,14 +42,9 @@ class PsyV8TaskRunner(BaseTaskRunner):
         self.add_teacher_model_resource_pool(config)
         self.add_ref_policy_worker(config, actor_rollout_cls)
 
-        # validate config
-        from verl.trainer.ppo.utils import need_critic, need_reference_policy
-
-        validate_config(
-            config=config,
-            use_reference_policy=need_reference_policy(config),
-            use_critic=need_critic(config),
-        )
+        # NOTE: validate_config from verl.utils.config is skipped here because it
+        # triggers vllm imports that are incompatible with current transformers version.
+        # RayPPOTrainer._validate_config() handles validation internally.
 
         # Download checkpoint
         local_path = copy_to_local(
