@@ -345,3 +345,20 @@ reward_model:
   use_psy_reward: True
   show_training_examples: True
   show_val_examples: True
+
+# configs for TransferQueue
+transfer_queue:
+  enable: False
+
+# profiler configs
+global_profiler:
+  tool: null
+  steps: null
+  
+# config for reward manager compatibility
+reward:
+  reward_model:
+    enable: False
+    enable_resource_pool: False
+    nnodes: 1
+    n_gpus_per_node: 8
